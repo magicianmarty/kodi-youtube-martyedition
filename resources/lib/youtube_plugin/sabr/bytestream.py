@@ -29,7 +29,7 @@ class ByteStream(object):
     """
 
     def __init__(self, session, itag, max_rounds=40,
-                 content_length=0, duration_ms=0):
+                 content_length=0, duration_ms=0, renew=None):
         self.session = session
         self.itag = itag
         self.max_rounds = max_rounds
@@ -39,6 +39,9 @@ class ByteStream(object):
         # own to count in.
         self.content_length = int(content_length or 0)
         self.duration_ms = int(duration_ms or 0)
+        # Called with the session's reload token when the server says the
+        # player response has expired; returns (url, ustreamer_config).
+        self.renew = renew
 
     @property
     def format(self):
@@ -121,6 +124,19 @@ class ByteStream(object):
             self.session.player_time_ms = self.position_ms(offset)
             self.session.fetch()
             rounds += 1
+
+            if self.session.needs_reload and self.renew:
+                # Clear it either way: a refused renewal must not make the
+                # next read try again straight away.
+                self.session.needs_reload = False
+                # The endpoint has expired. Renewing keeps the segments and
+                # the play head; without it the stream simply stops, which
+                # is the whole ~60s ceiling.
+                renewed = self.renew(self.session.reload_token)
+                if renewed:
+                    self.session.renew(*renewed)
+                    continue
+                break
             if self.available(offset) <= before and self.session.finished:
                 break
             if self.available(offset) <= before and rounds > 3:

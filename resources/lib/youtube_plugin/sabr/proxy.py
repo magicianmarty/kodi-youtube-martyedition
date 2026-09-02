@@ -18,12 +18,17 @@
 """
 
 from threading import RLock
+from time import time
 
 from . import adapter
 from . import client as sabr
 from .bytestream import ByteStream
 
 PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player'
+
+# A renewal is a player request; attempting one per failed read is a
+# request storm, and YouTube answers storms with a bot check.
+RENEW_COOLDOWN_SECONDS = 5
 
 # The client to stream as. It has to be one the add-on can authenticate, and
 # one the player response offers serverAbrStreamingUrl for.
@@ -39,6 +44,7 @@ class StreamServer(object):
         self.log = log
         self._streams = {}
         self._lock = RLock()
+        self._renew_not_before = 0.0
 
     @staticmethod
     def _json_hook(response=None, **_kwargs):
@@ -77,7 +83,8 @@ class StreamServer(object):
             return None
         return (response.get('responseContext') or {}).get('visitorData')
 
-    def _player_response(self, video_id, po_token=None, visitor_data=None):
+    def _player_response(self, video_id, po_token=None, visitor_data=None,
+                         reload_token=None):
         """
         Ask for the player response as the add-on's authenticated client.
 
@@ -88,6 +95,21 @@ class StreamServer(object):
         json_data = {'videoId': video_id}
         if po_token:
             json_data['serviceIntegrityDimensions'] = {'poToken': po_token}
+        # contentPlaybackContext rides on every player request, not only on
+        # reloads. Sending it for the first time *as part of* a reload
+        # changes the shape of the session halfway through, and the answer to
+        # that is LOGIN_REQUIRED - "sign in to confirm you're not a bot" -
+        # which reads as an authentication problem and is not one.
+        playback_context = {
+            'contentPlaybackContext': {
+                'html5Preference': 'HTML5_PREF_WANTS',
+            },
+        }
+        if reload_token:
+            playback_context['reloadPlaybackContext'] = {
+                'reloadPlaybackParams': {'token': reload_token},
+            }
+        json_data['playbackContext'] = playback_context
         client_data = {'json': json_data}
         if visitor_data:
             client_data['_visitor_data'] = visitor_data
@@ -190,9 +212,51 @@ class StreamServer(object):
                     (response.get('videoDetails') or {}).get('lengthSeconds')
                     or 0))
 
+            def renew(reload_token, _video_id=video_id, _pot=po_token,
+                      _visitor=visitor_data):
+                # Keep the session's original token: minting a fresh one
+                # makes a new identity, which is the opposite of the
+                # continuity a reload is asking for.
+                #
+                # And do not retry in a tight loop. Every failed read used to
+                # attempt another renewal immediately - 172 player requests
+                # in three minutes - and a request storm is precisely what
+                # earns LOGIN_REQUIRED, so the retries caused the failure
+                # they were retrying.
+                now = time()
+                if now < self._renew_not_before:
+                    return None
+                self._renew_not_before = now + RENEW_COOLDOWN_SECONDS
+
+                # Mint a token for the reload. The first attempt at this made
+                # things worse, but that was while every failed read fired
+                # another renewal - the storm caused the refusals, not the
+                # token. With the cooldown above, one fresh token per reload
+                # is what the reference implementation does.
+                if self.po_token_source:
+                    try:
+                        minted = self.po_token_source(_visitor or _video_id)
+                        if minted:
+                            _pot = minted
+                    except Exception:
+                        pass
+
+                fresh = self._player_response(_video_id, _pot, _visitor,
+                                              reload_token=reload_token)
+                if not fresh or not adapter.supports_sabr(fresh):
+                    status = ((fresh or {}).get('playabilityStatus')
+                              or {}).get('status')
+                    self._note('renewal refused for {0} (status {1!r})'
+                               .format(_video_id, status))
+                    return None
+                self._note('renewed the stream for {0}'.format(_video_id))
+                return (fresh['streamingData'][adapter.SERVER_ABR_URL],
+                        adapter.ustreamer_config(fresh))
+
             stream = ByteStream(session, int(itag),
                                 content_length=content_length,
-                                duration_ms=duration_ms)
+                                duration_ms=duration_ms,
+                                renew=renew)
             self._note('serving itag {0} of {1} over SABR '
                        '({2} bytes, {3}ms)'.format(itag, video_id,
                                                    content_length, duration_ms))

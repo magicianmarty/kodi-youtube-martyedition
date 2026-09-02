@@ -179,6 +179,7 @@ class Session(object):
         # of the session mints a fresh one and calls renew().
         self.reload_token = None
         self.needs_reload = False
+        self.force_cold = False
         self.finished = False
         # header_id is only meaningful within one response, so it is rebuilt
         # every round rather than kept.
@@ -220,10 +221,17 @@ class Session(object):
         # A cold start says nothing about formats, buffers or position: it is
         # the difference between "I have played nothing" and "I am at 0ms",
         # and the server treats them differently.
-        cold = self.rounds <= 1 and not any(f.segments for f in self.formats)
+        # A cold start introduces the session; a resume introduces it and
+        # says where playback is. The difference matters: a cold start with
+        # no position is answered from the beginning of the video, which
+        # after a renewal means the segments already held.
+        resuming = self.force_cold and self.player_time_ms > 0
+        cold = self.force_cold or (
+            self.rounds <= 1 and not any(f.segments for f in self.formats))
+        self.force_cold = False
         state = msg.ClientAbrState.encode(
             self.player_time_ms, self.track_types,
-            resolution=self.resolution, cold_start=cold)
+            resolution=self.resolution, cold_start=cold and not resuming)
         context = msg.StreamerContext.encode(
             self.client_info,
             po_token=self.po_token,
@@ -262,7 +270,8 @@ class Session(object):
             state,
             self.ustreamer_config,
             context,
-            player_time_ms=0 if cold else self.player_time_ms,
+            player_time_ms=(self.player_time_ms if resuming
+                            else (0 if cold else self.player_time_ms)),
             selected_format_ids=selected,
             buffered_ranges=[] if cold else buffered,
             preferred_audio=[f.format_id for f in self.formats
@@ -338,6 +347,9 @@ class Session(object):
         self.ustreamer_config = decode_ustreamer_config(ustreamer_config)
         self.needs_reload = False
         self.reload_token = None
+        # A renewed config is a new session to the server, so the next
+        # request introduces itself as one.
+        self.force_cold = True
 
     @property
     def buffered_ms(self):
