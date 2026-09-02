@@ -268,6 +268,22 @@ class StreamServer(object):
                 return (fresh['streamingData'][adapter.SERVER_ABR_URL],
                         adapter.ustreamer_config(fresh))
 
+            def attest(sess, _visitor=visitor_data, _video_id=video_id):
+                """Mint a fresh token when the server asks for one."""
+                if not self.po_token_source:
+                    return False
+                try:
+                    minted = self.po_token_source(_visitor or _video_id)
+                except Exception:
+                    return False
+                if not minted:
+                    return False
+                sess.po_token = sabr.decode_po_token(minted)
+                self._note('re-attested mid-stream for {0}'.format(_video_id))
+                return True
+
+            session.attest = attest
+
             stream = ByteStream(session, int(itag),
                                 content_length=content_length,
                                 duration_ms=duration_ms,

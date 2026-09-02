@@ -37,6 +37,24 @@ class SabrError(Exception):
     pass
 
 
+def decode_po_token(value):
+    """
+    A proof-of-origin token as the wire wants it: raw bytes.
+
+    Providers hand it over as base64url text, and the protobuf field is
+    bytes - so passing the text through unchanged sends the ASCII of the
+    base64 rather than the token. The server does not reject that outright;
+    it serves the opening minute and then asks for attestation forever,
+    which looks like the token being refused rather than mangled.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value
+    padding = '=' * (-len(value) % 4)
+    return urlsafe_b64decode(value + padding)
+
+
 def decode_ustreamer_config(value):
     """The player response carries it base64url encoded, with padding stripped."""
     if isinstance(value, bytes):
@@ -168,7 +186,7 @@ class Session(object):
         self.ustreamer_config = decode_ustreamer_config(ustreamer_config)
         self.client_info = client_info
         self.transport = transport
-        self.po_token = po_token
+        self.po_token = decode_po_token(po_token)
         self.formats = list(formats)
         self.track_types = track_types
         self.player_time_ms = 0
@@ -180,6 +198,10 @@ class Session(object):
         self.reload_token = None
         self.needs_reload = False
         self.force_cold = False
+        # Called when the server demands re-attestation; should install a
+        # fresh po_token on the session and return True.
+        self.attest = None
+        self.attestations = 0
         self.finished = False
         # header_id is only meaningful within one response, so it is rebuilt
         # every round rather than kept.
@@ -442,8 +464,15 @@ class Session(object):
         if part_type == ump.STREAM_PROTECTION_STATUS:
             status = msg.StreamProtectionStatus.decode(payload)
             if status == msg.StreamProtectionStatus.ATTESTATION_REQUIRED:
-                raise SabrError('attestation required - the proof-of-origin '
-                                'token was rejected or is missing')
+                # Not fatal, and not a reload: the server is asking for a
+                # fresh proof-of-origin token part way through the stream.
+                # A session that cannot mint one is finished; one that can
+                # keeps going on the same endpoint with the same buffer.
+                if self.attest and self.attest(self):
+                    self.attestations += 1
+                else:
+                    raise SabrError('attestation required and no fresh '
+                                    'proof-of-origin token available')
             return 0
 
         if part_type == ump.SABR_ERROR:

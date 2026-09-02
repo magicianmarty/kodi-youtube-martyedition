@@ -663,3 +663,60 @@ class TestReloadDirective(unittest.TestCase):
         self.assertNotIn(msg.VideoPlaybackAbrRequest.BUFFERED_RANGES,
                          pb.decode(session._request_body()))
         self.assertEqual(3, len(fmt.segments))
+
+
+class TestPoTokenEncoding(unittest.TestCase):
+    """
+    The token goes on the wire as raw bytes.
+
+    Providers hand it over as base64url text and the protobuf field is bytes,
+    so passing the text straight through sends the ASCII of the base64
+    instead of the token. Nothing rejects that outright - the opening minute
+    plays and then the server asks for attestation forever, which reads as a
+    token being refused rather than mangled.
+    """
+
+    def test_base64url_text_is_decoded(self):
+        self.assertEqual(b'\xfb\xff', sabr.decode_po_token('-_8'))
+
+    def test_bytes_are_left_alone(self):
+        self.assertEqual(b'raw', sabr.decode_po_token(b'raw'))
+
+    def test_none_stays_none(self):
+        self.assertIsNone(sabr.decode_po_token(None))
+
+    def test_a_session_normalises_what_it_is_given(self):
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'',
+                               po_token='-_8')
+        self.assertEqual(b'\xfb\xff', session.po_token)
+
+
+class TestAttestation(unittest.TestCase):
+    def test_attestation_required_is_not_fatal_when_it_can_be_answered(self):
+        """
+        ATTESTATION_REQUIRED means "mint a fresh token", not "give up" - the
+        endpoint and the buffer stay valid.
+        """
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'')
+        session.attest = lambda sess: True
+        session._handle(ump.STREAM_PROTECTION_STATUS,
+                        pb.encode([(1, msg.StreamProtectionStatus
+                                    .ATTESTATION_REQUIRED)]))
+        self.assertEqual(1, session.attestations)
+
+    def test_it_is_fatal_when_no_token_can_be_minted(self):
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'')
+        with self.assertRaises(sabr.SabrError):
+            session._handle(ump.STREAM_PROTECTION_STATUS,
+                            pb.encode([(1, msg.StreamProtectionStatus
+                                        .ATTESTATION_REQUIRED)]))
+
+    def test_an_ok_status_does_nothing(self):
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'')
+        session._handle(ump.STREAM_PROTECTION_STATUS,
+                        pb.encode([(1, msg.StreamProtectionStatus.OK)]))
+        self.assertEqual(0, session.attestations)
