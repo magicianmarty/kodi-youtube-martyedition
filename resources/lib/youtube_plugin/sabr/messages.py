@@ -267,3 +267,28 @@ class NextRequestPolicy(object):
             'backoff_ms': pb.first(fields, NextRequestPolicy.BACKOFF_TIME_MS, 0),
             'playback_cookie': pb.first(fields, NextRequestPolicy.PLAYBACK_COOKIE),
         }
+
+
+class ReloadPlayerResponse(object):
+    """
+    The server telling the client its player response has expired.
+
+    This is the whole reason a stream stops after about a minute. It is not a
+    grant being exhausted and nothing to do with how the request is shaped:
+    the serverAbrStreamingUrl and its ustreamer config go stale, and the
+    server hands back a token to mint fresh ones with. A client that ignores
+    it simply stops being sent media.
+    """
+
+    CONTEXT = 1
+    TOKEN = 1
+
+    @staticmethod
+    def decode(raw):
+        context = pb.first(pb.decode(raw), ReloadPlayerResponse.CONTEXT)
+        if not context:
+            return ''
+        token = pb.first(pb.decode(context), ReloadPlayerResponse.TOKEN)
+        if isinstance(token, bytes):
+            return token.decode('utf-8', 'replace')
+        return token or ''

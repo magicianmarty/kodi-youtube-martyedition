@@ -67,6 +67,9 @@ class Format(object):
         self.segments = {}
         self.buffered_ms = 0
         self.last_segment = -1
+        # Segments before this are held but no longer claimed as buffered;
+        # see Session.seek.
+        self.reported_from = 0
 
     @property
     def format_id(self):
@@ -172,6 +175,10 @@ class Session(object):
         self.playback_cookie = None
         self.backoff_ms = 0
         self.resolution = 0
+        # Set when the server says the player response has expired; the owner
+        # of the session mints a fresh one and calls renew().
+        self.reload_token = None
+        self.needs_reload = False
         self.finished = False
         # header_id is only meaningful within one response, so it is rebuilt
         # every round rather than kept.
@@ -232,7 +239,7 @@ class Session(object):
         for fmt in self.formats:
             have = fmt.contiguous_segments
             per_segment = fmt.segment_duration_ms
-            if not have or not per_segment:
+            if not have or not per_segment or have <= fmt.reported_from:
                 continue
             # Report what is still ahead of the play head, not everything
             # ever received. A player discards what it has played, and the
@@ -302,6 +309,35 @@ class Session(object):
                                    * fmt.segment_duration_ms)
 
         return received
+
+    def seek(self, position_ms):
+        """
+        Continue from `position_ms` rather than from what is buffered.
+
+        Buffered ranges describe a contiguous run from the start of playback.
+        After a renewal the client is effectively resuming, and claiming the
+        old run while the head sits beyond it describes a state no player can
+        be in - the server answers that with nothing at all. So the run is
+        forgotten for reporting purposes; the bytes already received are kept
+        and stay servable.
+        """
+        self.player_time_ms = int(position_ms)
+        for fmt in self.formats:
+            fmt.reported_from = fmt.contiguous_segments
+
+    def renew(self, url, ustreamer_config):
+        """
+        Continue with a freshly minted player response.
+
+        Everything received stays: the formats, their segments, the playback
+        cookie and the play head. Only the endpoint and its config are
+        replaced, which is the difference between resuming and starting the
+        video again from nothing.
+        """
+        self.url = url
+        self.ustreamer_config = decode_ustreamer_config(ustreamer_config)
+        self.needs_reload = False
+        self.reload_token = None
 
     @property
     def buffered_ms(self):
@@ -376,6 +412,13 @@ class Session(object):
                 self.playback_cookie = policy['playback_cookie']
             if policy['backoff_ms']:
                 self.backoff_ms = policy['backoff_ms']
+            return 0
+
+        if part_type == ump.RELOAD_PLAYER_RESPONSE:
+            token = msg.ReloadPlayerResponse.decode(payload)
+            if token:
+                self.reload_token = token
+                self.needs_reload = True
             return 0
 
         if part_type == ump.SABR_REDIRECT:

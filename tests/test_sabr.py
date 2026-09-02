@@ -597,3 +597,69 @@ class TestReadingBeforeAnythingArrives(unittest.TestCase):
 
     def test_reading_from_the_first_piece_still_works(self):
         self.assertEqual(b'later', self.stream({100: b'later'}).read(100, 5))
+
+
+class TestReloadDirective(unittest.TestCase):
+    """
+    The server stops after ~60s of media and sends RELOAD_PLAYER_RESPONSE.
+    That is the mechanism behind the whole ceiling: the streaming endpoint
+    and its config go stale, and the client is handed a token to mint fresh
+    ones with.
+    """
+
+    def test_the_token_is_extracted(self):
+        raw = pb.encode([(msg.ReloadPlayerResponse.CONTEXT,
+                          pb.encode([(msg.ReloadPlayerResponse.TOKEN,
+                                      b'CjxaAwoBByI')]))])
+        self.assertEqual('CjxaAwoBByI', msg.ReloadPlayerResponse.decode(raw))
+
+    def test_an_empty_directive_yields_nothing(self):
+        self.assertEqual('', msg.ReloadPlayerResponse.decode(b''))
+
+    def test_a_session_records_that_it_needs_renewing(self):
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'')
+        self.assertFalse(session.needs_reload)
+        session._handle(ump.RELOAD_PLAYER_RESPONSE, pb.encode([
+            (1, pb.encode([(1, b'token-bytes')]))]))
+        self.assertTrue(session.needs_reload)
+        self.assertEqual('token-bytes', session.reload_token)
+
+    def test_renewing_keeps_everything_but_the_endpoint(self):
+        """Resuming, not restarting: the segments and the play head stay."""
+        session = sabr.Session('http://old', b'old-cfg', b'ci',
+                               lambda url, body, headers: b'')
+        fmt = sabr.Format(394, 1)
+        fmt.accept(media_header(1), b'data')
+        session.formats = [fmt]
+        session.player_time_ms = 55000
+        session.needs_reload = True
+        session.renew('http://new', 'bmV3')
+        self.assertEqual('http://new', session.url)
+        self.assertEqual(b'new', session.ustreamer_config)
+        self.assertEqual(55000, session.player_time_ms)
+        self.assertEqual(1, len(fmt.segments))
+        self.assertFalse(session.needs_reload)
+
+    def test_seeking_stops_claiming_the_old_run(self):
+        """
+        Buffered ranges describe a contiguous run from the start. Claiming
+        one while the head sits beyond it describes a state no player can be
+        in, and the server answers with nothing.
+        """
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'')
+        fmt = sabr.Format(251, 1)
+        fmt.total_duration_ms = 100000
+        fmt.end_segment_number = 10
+        for sequence in (1, 2, 3):
+            fmt.accept(media_header(sequence), b'x')
+        session.formats = [fmt]
+        self.assertIn(msg.VideoPlaybackAbrRequest.BUFFERED_RANGES,
+                      pb.decode(session._request_body()))
+        session.rounds = 2
+        session.seek(30000)
+        self.assertEqual(3, fmt.reported_from)
+        self.assertNotIn(msg.VideoPlaybackAbrRequest.BUFFERED_RANGES,
+                         pb.decode(session._request_body()))
+        self.assertEqual(3, len(fmt.segments))
