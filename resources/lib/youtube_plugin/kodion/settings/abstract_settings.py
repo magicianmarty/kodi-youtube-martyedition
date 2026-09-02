@@ -101,6 +101,12 @@ class AbstractSettings(object):
     def use_default_view(self):
         return self.get_bool(SETTINGS.DEFAULT_VIEW, True)
 
+    def use_sabr(self):
+        return self.get_bool(SETTINGS.SABR_ENABLED, True)
+
+    def pot_provider_url(self):
+        return self.get_string(SETTINGS.POT_PROVIDER_URL, '').strip()
+
     def cache_size(self, value=None):
         if value is not None:
             return self.set_int(SETTINGS.CACHE_SIZE, value)

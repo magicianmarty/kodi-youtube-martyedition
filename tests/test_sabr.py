@@ -16,6 +16,29 @@ from youtube_plugin.sabr import protobuf as pb
 from youtube_plugin.sabr import ump
 
 
+def media_header(sequence, is_init=False, start_range=0, itag=394):
+    """
+    A header shaped like the ones MediaHeader.decode produces.
+
+    Built from the full field set on purpose: a fixture that omits fields the
+    real decoder always supplies passes tests the production path fails.
+    """
+    return {
+        'header_id': sequence,
+        'video_id': 'test',
+        'itag': itag,
+        'lmt': 1,
+        'start_range': start_range,
+        'compression': 0,
+        'is_init_seg': is_init,
+        'sequence_number': sequence,
+        'start_ms': 0,
+        'duration_ms': 0,
+        'content_length': 0,
+        'format_id': None,
+    }
+
+
 class TestProtobuf(unittest.TestCase):
     def test_the_canonical_example(self):
         """Field 1 = 150 is protobuf's own worked example: 08 96 01."""
@@ -185,24 +208,20 @@ class TestFormatBookkeeping(unittest.TestCase):
         """
         fmt = self.make()
         for sequence in (1, 2, 4, 5, 6):
-            fmt.accept({'sequence_number': sequence, 'is_init_seg': False,
-                        'duration_ms': 0, 'start_ms': 0}, b'x')
+            fmt.accept(media_header(sequence), b'x')
         self.assertEqual(5, len(fmt.segments))
         self.assertEqual(2, fmt.contiguous_segments)
 
     def test_the_init_segment_is_kept_apart_and_comes_first(self):
         fmt = self.make()
-        fmt.accept({'sequence_number': 0, 'is_init_seg': True,
-                    'duration_ms': 0, 'start_ms': 0}, b'INIT')
-        fmt.accept({'sequence_number': 1, 'is_init_seg': False,
-                    'duration_ms': 0, 'start_ms': 0}, b'one')
+        fmt.accept(media_header(0, is_init=True), b'INIT')
+        fmt.accept(media_header(1), b'one')
         self.assertEqual(b'INITone', fmt.data())
         self.assertEqual(1, len(fmt.segments))
 
     def test_a_repeated_segment_is_not_counted_twice(self):
         fmt = self.make()
-        header = {'sequence_number': 1, 'is_init_seg': False,
-                  'duration_ms': 0, 'start_ms': 0}
+        header = media_header(1)
         self.assertEqual(3, fmt.accept(header, b'abc'))
         self.assertEqual(0, fmt.accept(header, b'abc'))
 
@@ -232,8 +251,7 @@ class TestBufferedRangeReporting(unittest.TestCase):
         fmt.total_duration_ms = duration_ms * 100
         fmt.end_segment_number = 100
         for sequence in range(1, segments + 1):
-            fmt.accept({'sequence_number': sequence, 'is_init_seg': False,
-                        'duration_ms': 0, 'start_ms': 0}, b'x')
+            fmt.accept(media_header(sequence), b'x')
         return fmt
 
     def test_a_track_without_a_known_timeline_claims_nothing(self):
@@ -245,8 +263,7 @@ class TestBufferedRangeReporting(unittest.TestCase):
         """
         session = self.session()
         untimed = sabr.Format(394, 1)
-        untimed.accept({'sequence_number': 1, 'is_init_seg': False,
-                        'duration_ms': 0, 'start_ms': 0}, b'x')
+        untimed.accept(media_header(1), b'x')
         session.formats = [untimed]
         body = session._request_body()
         fields = pb.decode(body)
@@ -403,9 +420,91 @@ class TestColdStart(unittest.TestCase):
                                lambda url, body, headers: b'')
         fmt = sabr.Format(394, 1)
         fmt.requested = True
-        fmt.accept({'sequence_number': 1, 'is_init_seg': False,
-                    'duration_ms': 0, 'start_ms': 0}, b'x')
+        fmt.accept(media_header(1), b'x')
         session.formats = [fmt]
         session.rounds = 2
         fields = pb.decode(session._request_body())
         self.assertIn(msg.VideoPlaybackAbrRequest.SELECTED_FORMAT_IDS, fields)
+
+
+class TestByteStream(unittest.TestCase):
+    """
+    Where SABR meets inputstream.adaptive: segments in, byte ranges out.
+    """
+
+    def stream(self, pieces, segment_ms=10000):
+        from youtube_plugin.sabr import bytestream
+        fmt = sabr.Format(394, 1)
+        fmt.total_duration_ms = segment_ms * 10
+        fmt.end_segment_number = 10
+        fmt.offsets = dict(pieces)
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'')
+        session.formats = [fmt]
+        return bytestream.ByteStream(session, 394)
+
+    def test_reads_within_one_piece(self):
+        stream = self.stream({0: b'0123456789'})
+        self.assertEqual(b'234', stream.read(2, 3))
+
+    def test_reads_across_touching_pieces(self):
+        """The init segment then segment one, as they arrive."""
+        stream = self.stream({0: b'AAAA', 4: b'BBBB'})
+        self.assertEqual(b'AABBB', stream.read(2, 5))
+
+    def test_a_gap_is_not_silently_stitched(self):
+        """
+        Pieces that do not join must not be concatenated - that would hand
+        the decoder bytes from the wrong offset and look like corruption
+        rather than a missing segment.
+        """
+        stream = self.stream({0: b'AAAA', 8: b'CCCC'})
+        self.assertEqual(4, stream.available(0))
+        self.assertEqual(0, stream.available(4))
+
+    def test_available_is_zero_before_anything_arrives(self):
+        self.assertEqual(0, self.stream({}).available(0))
+
+    def test_available_is_zero_past_the_end_of_a_piece(self):
+        self.assertEqual(0, self.stream({0: b'AAAA'}).available(4))
+
+    def test_offsets_map_to_playback_time(self):
+        """
+        A seek arrives as a byte offset and the server only understands
+        seconds, so the two have to be related.
+        """
+        stream = self.stream({0: b'init', 4: b'one', 7: b'two', 10: b'three'})
+        self.assertEqual(0, stream.position_ms(0))
+        self.assertEqual(0, stream.position_ms(4))
+        self.assertEqual(10000, stream.position_ms(7))
+        self.assertEqual(20000, stream.position_ms(10))
+
+    def test_reading_asks_the_session_for_what_is_missing(self):
+        from youtube_plugin.sabr import bytestream
+        calls = []
+
+        fmt = sabr.Format(394, 1)
+        fmt.total_duration_ms = 100000
+        fmt.end_segment_number = 10
+        fmt.offsets = {0: b'AAAA'}
+
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'')
+        session.formats = [fmt]
+
+        def fetch():
+            calls.append(1)
+            if len(calls) == 2:
+                fmt.offsets[4] = b'BBBB'
+            return 0
+
+        session.fetch = fetch
+        stream = bytestream.ByteStream(session, 394)
+        self.assertEqual(b'AAAABBBB', stream.read(0, 8))
+        self.assertTrue(calls)
+
+    def test_a_read_at_the_end_returns_what_there_is(self):
+        """Short only at the end, so a reader can tell it from "not yet"."""
+        stream = self.stream({0: b'AAAA'})
+        stream.max_rounds = 1
+        self.assertEqual(b'AAAA', stream.read(0, 100))

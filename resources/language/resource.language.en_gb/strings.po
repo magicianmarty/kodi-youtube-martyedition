@@ -1612,3 +1612,19 @@ msgstr ""
 msgctxt "#30826"
 msgid "Video listings open in your skin's thumbnail view instead of a plain list. Turn this off to keep whichever view you last chose."
 msgstr ""
+
+msgctxt "#30827"
+msgid "Stream using SABR"
+msgstr ""
+
+msgctxt "#30828"
+msgid "YouTube serves only about a minute of a video to ordinary range requests before refusing the rest. SABR is the protocol its own players use. Turn this off to go back to range requests."
+msgstr ""
+
+msgctxt "#30829"
+msgid "Proof-of-origin token provider"
+msgstr ""
+
+msgctxt "#30830"
+msgid "Address of a bgutil POT provider, for example http://192.168.1.10:4416. Without one YouTube may refuse playback with \"Sign in to confirm you are not a bot\"."
+msgstr ""

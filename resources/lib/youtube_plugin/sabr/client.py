@@ -61,6 +61,8 @@ class Format(object):
         # The init segment carries no sequence number and belongs at the
         # front of the stream regardless of what arrives later.
         self.init_segment = b''
+        # {byte offset in the original file: bytes}
+        self.offsets = {}
         # Segments seen, keyed by sequence number, so a repeat is free.
         self.segments = {}
         self.buffered_ms = 0
@@ -109,12 +111,17 @@ class Format(object):
             if self.init_segment:
                 return 0
             self.init_segment = payload
+            self.offsets[0] = payload
             return len(payload)
 
         sequence = header['sequence_number']
         if sequence in self.segments:
             return 0
         self.segments[sequence] = payload
+        # Segments carry their offset in the original file and they are
+        # contiguous, so the file the range-request world would have served
+        # can be reassembled byte for byte from them.
+        self.offsets[header['start_range']] = payload
         self.last_segment = max(self.last_segment, sequence)
         if header['duration_ms']:
             self.buffered_ms = max(self.buffered_ms,

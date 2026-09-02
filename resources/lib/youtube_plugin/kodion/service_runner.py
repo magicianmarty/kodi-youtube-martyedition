@@ -41,6 +41,67 @@ from ..youtube.provider import Provider
 __all__ = ('run',)
 
 
+
+def _install_sabr(context, provider):
+    """
+    Point the stream proxy at SABR, using the add-on's own signed-in client.
+
+    Everything here is best effort. If it cannot be set up the proxy simply
+    keeps forwarding range requests, which is what it did before - a broken
+    session should cost the extra minutes of playback, not playback itself.
+    """
+    settings = context.get_settings()
+    if not settings.use_sabr():
+        return
+
+    try:
+        from ..sabr.proxy import StreamServer
+        from .network.http_server import RequestHandler
+    except ImportError:
+        logging.exception('SABR: not available')
+        return
+
+    provider_url = settings.pot_provider_url()
+
+    def fetch_po_token(video_id):
+        """
+        Mint a token bound to this video.
+
+        Minting runs Google's BotGuard payload and is slow - tens of seconds
+        on a first call - so failure returns None and playback proceeds
+        without one rather than blocking.
+        """
+        if not provider_url:
+            return None
+        from json import dumps, loads
+        from urllib.request import Request, urlopen
+        request = Request(
+            provider_url.rstrip('/') + '/get_pot',
+            data=dumps({'content_binding': video_id}).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+        )
+        try:
+            with urlopen(request, timeout=120) as response:
+                return loads(response.read().decode('utf-8')).get('poToken')
+        except Exception:
+            logging.exception('SABR: could not mint a proof-of-origin token')
+            return None
+
+    try:
+        client = provider.get_client(context)
+    except Exception:
+        logging.exception('SABR: no client, leaving the range proxy in place')
+        return
+
+    RequestHandler._sabr_server = StreamServer(
+        client,
+        po_token_source=fetch_po_token if provider_url else None,
+        log=logging.getLogger(__name__),
+    )
+    logging.info('SABR: stream proxy enabled (POT provider: {url!r})',
+                 url=provider_url or 'none')
+
+
 def run():
     context = XbmcContext()
     provider = Provider()
@@ -49,6 +110,8 @@ def run():
     player = PlayerMonitor(provider=provider,
                            context=context,
                            monitor=monitor)
+
+    _install_sabr(context, provider)
 
     system_version = context.get_system_version()
     logging.info(('Starting v{version}',

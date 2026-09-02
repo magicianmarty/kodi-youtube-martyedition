@@ -259,6 +259,46 @@ class RequestHandler(BaseHTTPRequestHandler, object):
         return ip_allowed, path
 
     # noinspection PyPep8Naming
+    # Set by the service once a provider exists; None disables SABR.
+    _sabr_server = None
+
+    def _serve_from_sabr(self, stream_id, byte_range):
+        """
+        Answer one range request out of a SABR session.
+
+        Returns True when it was served. Anything else - no session, a short
+        read, an exception - returns False so the caller falls through to the
+        range proxy.
+        """
+        try:
+            if not byte_range.startswith('bytes='):
+                return False
+            span = byte_range[6:].split('-', 1)
+            start = int(span[0])
+            end = int(span[1]) if len(span) > 1 and span[1] else None
+            if len(stream_id) < 2:
+                return False
+            video_id, itag = stream_id[0], stream_id[1]
+            length = (end - start + 1) if end is not None else (1 << 20)
+
+            data = self._sabr_server.read(video_id, itag, start, length)
+            if not data:
+                return False
+
+            last = start + len(data) - 1
+            self.send_response(206)
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Content-Range',
+                             'bytes {0}-{1}/*'.format(start, last))
+            self.send_header('Accept-Ranges', 'bytes')
+            self.end_headers()
+            self.wfile.write(data)
+            return True
+        except Exception:
+            self.log.exception('SABR: could not serve range, falling back')
+            return False
+
     def do_GET(self):
         allowed, path = self.connection_allowed('GET')
         if not allowed:
@@ -385,6 +425,17 @@ class RequestHandler(BaseHTTPRequestHandler, object):
                 headers = self.headers
 
             byte_range = headers.get('Range')
+
+            # Serve from SABR when it can. googlevideo answers these ranges
+            # with 403 after about a minute of any stream, whatever is asked
+            # of it; SABR is what the official players use instead. Failure
+            # here falls through to the old path rather than failing the
+            # request, so a broken session degrades to the old ceiling
+            # instead of to no playback.
+            if self._sabr_server is not None and byte_range:
+                if self._serve_from_sabr(stream_id, byte_range):
+                    return
+
             client = headers.get('X-YouTube-Client-Name')
             if self.log.debugging:
                 if 'c' in params:
@@ -1028,6 +1079,11 @@ class Pages(object):
             }
         ''').splitlines(True)) + '\t\t'.expandtabs(2)
     }
+
+
+def _install_sabr(handler_class, server):
+    """Give the request handler a SABR server, or None to disable it."""
+    handler_class._sabr_server = server
 
 
 def get_http_server(address, port, context):
