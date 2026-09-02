@@ -110,25 +110,40 @@ class StreamServer(object):
                 'reloadPlaybackParams': {'token': reload_token},
             }
         json_data['playbackContext'] = playback_context
-        client_data = {'json': json_data}
-        if visitor_data:
-            client_data['_visitor_data'] = visitor_data
+        # Shaped exactly like the add-on's own player request. The pieces
+        # that are easy to leave out are the ones that matter: without
+        # _access_tokens, build_client has nothing to put in the
+        # Authorization header, so the request goes out anonymous - and an
+        # anonymous reload is answered with LOGIN_REQUIRED, which reads as a
+        # bot check rather than as the missing credential it is.
+        client_data = {
+            'json': json_data,
+            'url': getattr(self.client, 'V1_API_URL', PLAYER_URL),
+            'method': 'POST',
+            '_access_tokens': {
+                'user': self.client._access_tokens.get('user'),
+                'tv': self.client._access_tokens.get('tv'),
+                'vr': self.client._access_tokens.get('vr'),
+            },
+            '_endpoint': 'player',
+            '_cpn': self.client._generate_cpn(),
+            '_visitor_data': visitor_data,
+        }
         spec = self.client.build_client(CLIENT_NAME, client_data)
         if not spec:
             return None
         return self.client.request(
-            PLAYER_URL,
-            method='POST',
-            json=spec.get('json'),
-            headers=spec.get('headers'),
-            params=spec.get('params'),
-            has_auth=spec.get('_has_auth'),
-            visitor_data=spec.get('_visitor_data'),
+            response_hook=self._json_hook,
             error_title='SABR: failed to get player response',
+            error_hook=self.client._player_error_hook,
             video_id=video_id,
             client_name=CLIENT_NAME,
-            response_hook=self._json_hook,
+            has_auth=spec.get('_has_auth'),
+            visitor_data=spec.get('_visitor_data'),
             cache=False,
+            pass_data=True,
+            raise_exc=False,
+            **spec
         )
 
     def _transport(self, headers):
