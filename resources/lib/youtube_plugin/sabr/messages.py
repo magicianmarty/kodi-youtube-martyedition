@@ -229,3 +229,24 @@ class StreamProtectionStatus(object):
     @staticmethod
     def decode(raw):
         return pb.first(pb.decode(raw), StreamProtectionStatus.STATUS, 0)
+
+
+class NextRequestPolicy(object):
+    """
+    What the server wants the client to do next.
+
+    Field 7 is the playback cookie. It is not advice: it is continuity, and
+    a client that does not echo it back looks like a new session on every
+    request. That is what stops the stream once the opening grant is spent.
+    """
+
+    BACKOFF_TIME_MS = 1
+    PLAYBACK_COOKIE = 7
+
+    @staticmethod
+    def decode(raw):
+        fields = pb.decode(raw)
+        return {
+            'backoff_ms': pb.first(fields, NextRequestPolicy.BACKOFF_TIME_MS, 0),
+            'playback_cookie': pb.first(fields, NextRequestPolicy.PLAYBACK_COOKIE),
+        }

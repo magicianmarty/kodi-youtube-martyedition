@@ -157,6 +157,7 @@ class Session(object):
         self.track_types = track_types
         self.player_time_ms = 0
         self.playback_cookie = None
+        self.backoff_ms = 0
         self.finished = False
         # header_id is only meaningful within one response, so it is rebuilt
         # every round rather than kept.
@@ -188,6 +189,12 @@ class Session(object):
             return fmt
         return None
 
+    @staticmethod
+    def _key(header):
+        """What identifies a segment across responses."""
+        return (header['itag'], header['sequence_number'],
+                bool(header['is_init_seg']))
+
     def _request_body(self):
         state = msg.ClientAbrState.encode(self.player_time_ms, self.track_types)
         context = msg.StreamerContext.encode(
@@ -195,14 +202,33 @@ class Session(object):
             po_token=self.po_token,
             playback_cookie=self.playback_cookie,
         )
+        # Only report a range for a track whose segmentation the server
+        # actually told us. Reporting a borrowed duration is worse than
+        # reporting nothing: the server reads the time, not the segment
+        # count, and answers by skipping whatever it believes is already
+        # delivered - which is how the video track ended up missing a
+        # segment it was never sent.
         buffered = []
         for fmt in self.formats:
-            if fmt.segments:
-                have = fmt.contiguous_segments
-                if not have:
-                    continue
-                buffered.append(msg.BufferedRange.encode(
-                    fmt.format_id, 0, fmt.buffered_ms, 1, have))
+            have = fmt.contiguous_segments
+            per_segment = fmt.segment_duration_ms
+            if not have or not per_segment:
+                continue
+            # Report what is still ahead of the play head, not everything
+            # ever received. A player discards what it has played, and the
+            # server caps how much it will hold for you - reporting from zero
+            # keeps that window permanently full and stops the stream at a
+            # minute.
+            played = self.player_time_ms // per_segment
+            start_segment = min(played + 1, have)
+            start_ms = (start_segment - 1) * per_segment
+            buffered.append(msg.BufferedRange.encode(
+                fmt.format_id,
+                start_ms,
+                (have * per_segment) - start_ms,
+                start_segment,
+                have,
+            ))
         selected = [fmt.format_id for fmt in self.formats if fmt.requested]
         return msg.VideoPlaybackAbrRequest.encode(
             state,
@@ -226,6 +252,7 @@ class Session(object):
         stuck, which the caller notices through `finished`.
         """
         self.rounds += 1
+        self._headers = {}
         body = self._request_body()
         headers = {'Content-Type': 'application/x-protobuf'}
         raw = self.transport(self.url, body, headers)
@@ -247,19 +274,19 @@ class Session(object):
         # others, or a track without metadata reports nothing buffered and
         # pins the play head at zero - which the server reads as "they still
         # have not played anything" and answers with no media at all.
-        shared = self.segment_duration_ms
-        if shared:
-            for fmt in self.formats:
-                if fmt.segments:
-                    fmt.buffered_ms = fmt.contiguous_segments * shared
+        for fmt in self.formats:
+            if fmt.segments and fmt.segment_duration_ms:
+                fmt.buffered_ms = (fmt.contiguous_segments
+                                   * fmt.segment_duration_ms)
 
-        # The play head is the least-buffered track: playback can only
-        # continue as far as every track it needs has arrived.
-        buffered = [f.buffered_ms for f in self.formats
-                    if f.segments and f.contiguous_segments]
-        if buffered:
-            self.player_time_ms = min(buffered)
         return received
+
+    @property
+    def buffered_ms(self):
+        """How far playback could continue: the least-buffered timed track."""
+        timed = [f.buffered_ms for f in self.formats
+                 if f.segment_duration_ms and f.contiguous_segments]
+        return min(timed) if timed else 0
 
     @property
     def segment_duration_ms(self):
@@ -275,14 +302,22 @@ class Session(object):
             if not header['itag'] and header['format_id']:
                 header['itag'] = header['format_id']['itag']
             self._headers[header['header_id']] = header
-            self._chunks[header['header_id']] = bytearray()
+            # Keyed by what the segment *is*, not by the header id it came
+            # under. Header ids restart at 1 in every response, so a segment
+            # split across two responses would otherwise have its second half
+            # appended to whatever unrelated segment reused that id.
+            self._chunks.setdefault(self._key(header), bytearray())
             return 0
 
         if part_type == ump.MEDIA:
             header_id, pos = ump.read_varint(payload, 0)
-            if header_id is None or header_id not in self._chunks:
+            if header_id is None:
                 return 0
-            self._chunks[header_id] += payload[pos:]
+            header = self._headers.get(header_id)
+            if header is None:
+                return 0
+            self._chunks.setdefault(self._key(header), bytearray())
+            self._chunks[self._key(header)] += payload[pos:]
             return 0
 
         if part_type == ump.MEDIA_END:
@@ -290,8 +325,10 @@ class Session(object):
             if header_id is None:
                 return 0
             header = self._headers.get(header_id)
-            body = self._chunks.pop(header_id, None)
-            if header is None or not body:
+            if header is None:
+                return 0
+            body = self._chunks.pop(self._key(header), None)
+            if not body:
                 return 0
             fmt = self._by_itag(header['itag'], header['lmt'])
             if fmt is None:
@@ -309,6 +346,14 @@ class Session(object):
                     fmt.mime_type = meta['mime_type']
                     fmt.total_duration_ms = meta['end_time_ms']
                     fmt.end_segment_number = meta['end_segment_number']
+            return 0
+
+        if part_type == ump.NEXT_REQUEST_POLICY:
+            policy = msg.NextRequestPolicy.decode(payload)
+            if policy['playback_cookie']:
+                self.playback_cookie = policy['playback_cookie']
+            if policy['backoff_ms']:
+                self.backoff_ms = policy['backoff_ms']
             return 0
 
         if part_type == ump.SABR_REDIRECT:
@@ -329,23 +374,30 @@ class Session(object):
 
         return 0
 
-    def run(self, until_ms=None, max_rounds=200):
+    def run(self, until_ms=None, max_rounds=200, lead_ms=30000):
         """
-        Keep asking until the play head reaches `until_ms`, the stream ends,
-        or the session stops making progress.
+        Fill the buffer up to `until_ms`.
+
+        The play head is playback position, not buffer end - a real player is
+        always behind what it has downloaded. Reporting the two as equal says
+        "I have played everything I have", and the server stops sending. So
+        the head is walked forward to stay `lead_ms` behind the buffer, which
+        is what a player does while it plays.
         """
         idle = 0
         while self.rounds < max_rounds:
-            before = self.player_time_ms
+            before = self.buffered_ms
             got = self.fetch()
-            if until_ms is not None and self.player_time_ms >= until_ms:
+            buffered = self.buffered_ms
+            self.player_time_ms = max(0, buffered - lead_ms)
+            if until_ms is not None and buffered >= until_ms:
                 return True
             done = [f for f in self.formats
                     if f.total_duration_ms and f.buffered_ms >= f.total_duration_ms]
             if done and len(done) == len(self.formats):
                 self.finished = True
                 return True
-            if not got and self.player_time_ms <= before:
+            if not got and buffered <= before:
                 idle += 1
                 if idle >= MAX_IDLE_ROUNDS:
                     self.finished = True

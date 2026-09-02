@@ -215,3 +215,85 @@ class TestUstreamerConfig(unittest.TestCase):
 
     def test_bytes_pass_through(self):
         self.assertEqual(b'raw', sabr.decode_ustreamer_config(b'raw'))
+
+
+class TestBufferedRangeReporting(unittest.TestCase):
+    """
+    What the session claims to hold decides what the server sends next, so
+    these are the rules that were learned by getting them wrong.
+    """
+
+    def session(self):
+        return sabr.Session('http://example/abr', b'config', b'client-info',
+                            lambda url, body, headers: b'')
+
+    def timed(self, itag, segments, duration_ms=10000):
+        fmt = sabr.Format(itag, 1)
+        fmt.total_duration_ms = duration_ms * 100
+        fmt.end_segment_number = 100
+        for sequence in range(1, segments + 1):
+            fmt.accept({'sequence_number': sequence, 'is_init_seg': False,
+                        'duration_ms': 0, 'start_ms': 0}, b'x')
+        return fmt
+
+    def test_a_track_without_a_known_timeline_claims_nothing(self):
+        """
+        Borrowing another track's segment length looks helpful and is not:
+        the server reads the time rather than the segment count, decides the
+        range is delivered, and skips a segment it never sent. That is how
+        the video track ended up with a permanent hole in it.
+        """
+        session = self.session()
+        untimed = sabr.Format(394, 1)
+        untimed.accept({'sequence_number': 1, 'is_init_seg': False,
+                        'duration_ms': 0, 'start_ms': 0}, b'x')
+        session.formats = [untimed]
+        body = session._request_body()
+        fields = pb.decode(body)
+        self.assertNotIn(msg.VideoPlaybackAbrRequest.BUFFERED_RANGES, fields)
+
+    def test_a_timed_track_reports_a_range(self):
+        session = self.session()
+        session.formats = [self.timed(251, 3)]
+        fields = pb.decode(session._request_body())
+        self.assertIn(msg.VideoPlaybackAbrRequest.BUFFERED_RANGES, fields)
+
+    def test_the_range_starts_at_the_play_head_not_at_zero(self):
+        """A player reports what it still holds, having discarded what it
+        played; reporting from zero keeps the server's window full."""
+        session = self.session()
+        session.formats = [self.timed(251, 6)]
+        session.player_time_ms = 30000
+        fields = pb.decode(session._request_body())
+        span = pb.decode(
+            fields[msg.VideoPlaybackAbrRequest.BUFFERED_RANGES][0])
+        self.assertEqual(30000, pb.first(span, msg.BufferedRange.START_TIME_MS))
+        self.assertEqual(4, pb.first(span, msg.BufferedRange.START_SEGMENT_INDEX))
+        self.assertEqual(6, pb.first(span, msg.BufferedRange.END_SEGMENT_INDEX))
+
+    def test_the_play_head_is_not_derived_from_the_buffer(self):
+        """
+        Head and buffer end being equal says "I have played everything I
+        have", which no playing player ever reports - and the server stops.
+        """
+        session = self.session()
+        session.formats = [self.timed(251, 6)]
+        self.assertEqual(60000, session.buffered_ms)
+        self.assertEqual(0, session.player_time_ms)
+
+
+class TestNextRequestPolicy(unittest.TestCase):
+    def test_the_playback_cookie_is_carried_forward(self):
+        """Continuity, not advice: a session that drops it looks new on
+        every request."""
+        raw = pb.encode([
+            (msg.NextRequestPolicy.BACKOFF_TIME_MS, 15000),
+            (msg.NextRequestPolicy.PLAYBACK_COOKIE, b'cookie-bytes'),
+        ])
+        policy = msg.NextRequestPolicy.decode(raw)
+        self.assertEqual(b'cookie-bytes', policy['playback_cookie'])
+        self.assertEqual(15000, policy['backoff_ms'])
+
+    def test_a_policy_without_a_cookie_is_not_an_error(self):
+        policy = msg.NextRequestPolicy.decode(pb.encode([(1, 15000)]))
+        self.assertIsNone(policy['playback_cookie'])
