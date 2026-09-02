@@ -1,0 +1,10 @@
+[flake8]
+max-line-length = 100
+# Only the checks that catch code which breaks when it runs: syntax errors,
+# undefined names, broken f-strings, duplicate definitions. Unused imports and
+# locals are left alone deliberately - this fork merges from upstream, and
+# rewriting their tidiness costs conflicts and buys nothing on the box. The
+# gate earns its place as it is: it found match.group(CHANNEL_ID), an
+# undefined name that raised NameError on every channel-by-URL lookup.
+select = E9,F63,F7,F82,F811
+exclude = .git,__pycache__,tests/kodistubs,.scripts

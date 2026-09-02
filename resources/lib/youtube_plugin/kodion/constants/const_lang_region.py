@@ -8,9 +8,6 @@
     See LICENSES/GPL-2.0-only for more information.
 """
 
-from __future__ import absolute_import, division, unicode_literals
-
-
 DEFAULT_LANGUAGES = {'items': [
     {'id': 'af', 'snippet': {'hl': 'af', 'name':         'Afrikaans'}},
     {'id': 'sq', 'snippet': {'hl': 'sq', 'name':         'Albanian'}},

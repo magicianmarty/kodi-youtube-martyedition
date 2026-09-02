@@ -8,9 +8,6 @@
     See LICENSES/GPL-2.0-only for more information.
 """
 
-from __future__ import absolute_import, division, unicode_literals
-
-
 key_sets = {
     'youtube-tv': {
         'api_key': 'QUl6YVN5QzZmdlpTSkhBN1Z6NWo4akNpS1J0N3RVSU9xakUyTjNn',

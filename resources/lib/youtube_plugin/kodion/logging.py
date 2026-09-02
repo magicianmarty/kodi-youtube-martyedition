@@ -8,7 +8,6 @@
     See LICENSES/GPL-2.0-only for more information.
 """
 
-from __future__ import absolute_import, division, unicode_literals
 
 import logging
 import sys
@@ -30,8 +29,10 @@ from .utils.redact import (
 from .utils.system_version import current_system_version
 
 
+# Names resolved by this module's own __getattr__ (PEP 562), which neither
+# an IDE nor flake8 can see from here.
 # noinspection PyUnresolvedReferences
-__all__ = (
+__all__ = (  # noqa: F822
     'check_frame',
     'critical',
     'debug',
@@ -284,7 +285,7 @@ class Handler(logging.Handler):
         logging.NOTSET: xbmc.LOGNONE,
         logging.DEBUG: xbmc.LOGDEBUG,
         # logging.INFO: xbmc.LOGINFO,
-        logging.INFO: xbmc.LOGNOTICE,
+        logging.INFO: xbmc.LOGINFO,
         logging.WARN: xbmc.LOGWARNING,
         logging.WARNING: xbmc.LOGWARNING,
         logging.ERROR: xbmc.LOGERROR,
@@ -523,7 +524,7 @@ class KodiLogger(logging.Logger):
     @debugging.setter
     def debugging(self, value):
         if value:
-            Handler.LEVELS[logging.DEBUG] = xbmc.LOGNOTICE
+            Handler.LEVELS[logging.DEBUG] = xbmc.LOGINFO
             self.setLevel(logging.DEBUG)
             root.setLevel(logging.DEBUG)
         else:

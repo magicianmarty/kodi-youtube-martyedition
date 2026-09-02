@@ -7,7 +7,6 @@
     See LICENSES/GPL-2.0-only for more information.
 """
 
-from __future__ import absolute_import, division, unicode_literals
 
 from ..youtube_exceptions import YouTubeException
 from ...kodion.compatibility import range_type, unescape, urljoin
