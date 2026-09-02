@@ -1,0 +1,217 @@
+# -*- coding: utf-8 -*-
+"""
+The SABR protocol layers.
+
+These are the parts that can be pinned without a network: the two varint
+encodings, the UMP container, and the message field maps. The wire format is
+not ours and cannot be looked up when it breaks, so it is described here
+rather than discovered again.
+"""
+
+import unittest
+
+from youtube_plugin.sabr import client as sabr
+from youtube_plugin.sabr import messages as msg
+from youtube_plugin.sabr import protobuf as pb
+from youtube_plugin.sabr import ump
+
+
+class TestProtobuf(unittest.TestCase):
+    def test_the_canonical_example(self):
+        """Field 1 = 150 is protobuf's own worked example: 08 96 01."""
+        self.assertEqual(b'\x08\x96\x01', pb.encode([(1, 150)]))
+
+    def test_varint_round_trip(self):
+        for value in (0, 1, 127, 128, 300, 2 ** 31, 2 ** 63 - 1):
+            self.assertEqual(value, pb.decode_varint(pb.encode_varint(value))[0])
+
+    def test_strings_are_utf8_length_delimited(self):
+        self.assertEqual(b'\x12\x02hi', pb.encode([(2, 'hi')]))
+
+    def test_repeated_fields_are_just_repeated(self):
+        encoded = pb.encode([(1, 10), (1, 20), (1, 30)])
+        self.assertEqual([10, 20, 30], pb.decode(encoded)[1])
+
+    def test_none_is_omitted_not_encoded(self):
+        self.assertEqual(b'', pb.encode([(1, None)]))
+
+    def test_decode_ignores_unknown_fields(self):
+        """Anything we do not model is data we do not need, not an error."""
+        fields = pb.decode(pb.encode([(1, 5), (999, b'junk')]))
+        self.assertEqual(5, pb.first(fields, 1))
+        self.assertIn(999, fields)
+
+    def test_truncated_input_is_rejected(self):
+        with self.assertRaises(ValueError):
+            pb.decode(b'\x12\x05ab')
+
+
+class TestUmpVarint(unittest.TestCase):
+    def test_the_documented_example(self):
+        """0x80 0x41 is 4160 - the worked example from the format notes."""
+        self.assertEqual(4160, ump.read_varint(bytes((0x80, 0x41)))[0])
+
+    def test_leading_bits_give_the_length(self):
+        self.assertEqual(1, ump.varint_size(0x42))
+        self.assertEqual(2, ump.varint_size(0x80))
+        self.assertEqual(3, ump.varint_size(0xC0))
+        self.assertEqual(4, ump.varint_size(0xE0))
+        self.assertEqual(5, ump.varint_size(0xF0))
+
+    def test_round_trip_across_every_width(self):
+        for value in (0, 1, 127, 128, 4160, 5000, 100000, 20000000, 4000000000):
+            encoded = ump.write_varint(value)
+            self.assertEqual(value, ump.read_varint(encoded)[0],
+                             'failed for {0}'.format(value))
+
+    def test_it_is_not_protobufs_varint(self):
+        """Same job, different encoding - confusing them silently misreads."""
+        self.assertNotEqual(ump.write_varint(300), pb.encode_varint(300))
+
+    def test_incomplete_input_asks_for_more_rather_than_guessing(self):
+        self.assertEqual((None, 0), ump.read_varint(b'\x80'))
+        self.assertEqual((None, 0), ump.read_varint(b''))
+
+
+class TestUmpReader(unittest.TestCase):
+    @staticmethod
+    def part(part_type, payload):
+        return (ump.write_varint(part_type) + ump.write_varint(len(payload))
+                + payload)
+
+    def test_reads_consecutive_parts(self):
+        reader = ump.Reader()
+        reader.feed(self.part(20, b'header') + self.part(21, b'media'))
+        self.assertEqual((20, b'header'), reader.read())
+        self.assertEqual((21, b'media'), reader.read())
+        self.assertIsNone(reader.read())
+
+    def test_a_part_split_across_feeds_waits_for_the_rest(self):
+        """
+        Parts are not guaranteed to fit in one response, so a reader that
+        returned half a part would hand corrupted media to the decoder.
+        """
+        whole = self.part(21, b'0123456789')
+        reader = ump.Reader()
+        reader.feed(whole[:6])
+        self.assertIsNone(reader.read())
+        reader.feed(whole[6:])
+        self.assertEqual((21, b'0123456789'), reader.read())
+
+    def test_pending_reports_what_is_held_back(self):
+        reader = ump.Reader()
+        reader.feed(self.part(21, b'abc')[:-1])
+        self.assertIsNone(reader.read())
+        self.assertTrue(reader.pending)
+
+    def test_iterating_yields_only_complete_parts(self):
+        reader = ump.Reader()
+        reader.feed(self.part(20, b'a') + self.part(21, b'bb') + b'\x15')
+        self.assertEqual([(20, b'a'), (21, b'bb')], list(reader))
+
+    def test_unknown_part_types_are_named_not_dropped(self):
+        self.assertEqual('MEDIA', ump.name_of(ump.MEDIA))
+        self.assertEqual('PART_222', ump.name_of(222))
+
+
+class TestMessages(unittest.TestCase):
+    def test_format_id_round_trip(self):
+        encoded = msg.FormatId.encode(313, 1788256282938590)
+        decoded = msg.FormatId.decode(encoded)
+        self.assertEqual(313, decoded['itag'])
+        self.assertEqual(1788256282938590, decoded['last_modified'])
+
+    def test_track_types_is_a_bitfield(self):
+        """
+        Named a bitfield and behaves like one: audio is bit 0, video bit 1.
+        Sending 0 for "both" asks for no tracks at all, and the server
+        answers with policy parts and no media whatsoever.
+        """
+        self.assertEqual(1, msg.ClientAbrState.TRACKS_AUDIO_ONLY)
+        self.assertEqual(2, msg.ClientAbrState.TRACKS_VIDEO_ONLY)
+        self.assertEqual(3, msg.ClientAbrState.TRACKS_AUDIO_AND_VIDEO)
+        self.assertEqual(msg.ClientAbrState.TRACKS_AUDIO_AND_VIDEO,
+                         msg.ClientAbrState.TRACKS_AUDIO_ONLY
+                         | msg.ClientAbrState.TRACKS_VIDEO_ONLY)
+
+    def test_media_header_decodes_the_fields_playback_needs(self):
+        raw = pb.encode([
+            (msg.MediaHeader.HEADER_ID, 3),
+            (msg.MediaHeader.VIDEO_ID, 'kJQ89v9v5uM'),
+            (msg.MediaHeader.ITAG, 394),
+            (msg.MediaHeader.SEQUENCE_NUMBER, 7),
+            (msg.MediaHeader.START_RANGE, 37919),
+            (msg.MediaHeader.CONTENT_LENGTH, 52498),
+        ])
+        header = msg.MediaHeader.decode(raw)
+        self.assertEqual(3, header['header_id'])
+        self.assertEqual('kJQ89v9v5uM', header['video_id'])
+        self.assertEqual(394, header['itag'])
+        self.assertEqual(7, header['sequence_number'])
+        self.assertFalse(header['is_init_seg'])
+
+    def test_request_carries_the_config_and_context(self):
+        state = msg.ClientAbrState.encode(0, 3)
+        context = msg.StreamerContext.encode(
+            msg.ClientInfo.encode(28, '1.65.10'), po_token=b'token')
+        body = msg.VideoPlaybackAbrRequest.encode(
+            state, b'config', context, player_time_ms=1234)
+        fields = pb.decode(body)
+        self.assertEqual(b'config',
+                         pb.first(fields, msg.VideoPlaybackAbrRequest.USTREAMER_CONFIG))
+        self.assertEqual(1234,
+                         pb.first(fields, msg.VideoPlaybackAbrRequest.PLAYER_TIME_MS))
+
+
+class TestFormatBookkeeping(unittest.TestCase):
+    def make(self):
+        fmt = sabr.Format(394, 1)
+        fmt.total_duration_ms = 1750001
+        fmt.end_segment_number = 175
+        return fmt
+
+    def test_segment_duration_comes_from_the_metadata(self):
+        """1750001ms over 175 segments is ten seconds each."""
+        self.assertEqual(10000, self.make().segment_duration_ms)
+
+    def test_unknown_segmentation_is_zero_not_a_guess(self):
+        self.assertEqual(0, sabr.Format(394, 1).segment_duration_ms)
+
+    def test_contiguous_stops_at_the_first_gap(self):
+        """
+        Playback stops at a missing segment however much arrived after it,
+        so a gap must not be reported as buffered - the server would treat
+        that range as delivered and never resend it.
+        """
+        fmt = self.make()
+        for sequence in (1, 2, 4, 5, 6):
+            fmt.accept({'sequence_number': sequence, 'is_init_seg': False,
+                        'duration_ms': 0, 'start_ms': 0}, b'x')
+        self.assertEqual(5, len(fmt.segments))
+        self.assertEqual(2, fmt.contiguous_segments)
+
+    def test_the_init_segment_is_kept_apart_and_comes_first(self):
+        fmt = self.make()
+        fmt.accept({'sequence_number': 0, 'is_init_seg': True,
+                    'duration_ms': 0, 'start_ms': 0}, b'INIT')
+        fmt.accept({'sequence_number': 1, 'is_init_seg': False,
+                    'duration_ms': 0, 'start_ms': 0}, b'one')
+        self.assertEqual(b'INITone', fmt.data())
+        self.assertEqual(1, len(fmt.segments))
+
+    def test_a_repeated_segment_is_not_counted_twice(self):
+        fmt = self.make()
+        header = {'sequence_number': 1, 'is_init_seg': False,
+                  'duration_ms': 0, 'start_ms': 0}
+        self.assertEqual(3, fmt.accept(header, b'abc'))
+        self.assertEqual(0, fmt.accept(header, b'abc'))
+
+
+class TestUstreamerConfig(unittest.TestCase):
+    def test_base64url_without_padding_is_accepted(self):
+        """The player response strips the padding; feeding that to b64decode
+        raises rather than returning short data, so it has to be restored."""
+        self.assertEqual(b'\xfb\xff', sabr.decode_ustreamer_config('-_8'))
+
+    def test_bytes_pass_through(self):
+        self.assertEqual(b'raw', sabr.decode_ustreamer_config(b'raw'))
