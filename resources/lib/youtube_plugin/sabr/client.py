@@ -147,8 +147,14 @@ class Session(object):
     """
 
     def __init__(self, url, ustreamer_config, client_info, transport,
-                 po_token=None, formats=(), track_types=AUDIO_AND_VIDEO):
+                 po_token=None, formats=(), track_types=AUDIO_AND_VIDEO,
+                 headers=None):
         self.url = url
+        # Sent with every request. This is where the add-on's Authorization
+        # goes: SABR is a separate endpoint from the player call, but it is
+        # the same session and the same account, and a signed-in player that
+        # streams anonymously is two different users to YouTube.
+        self.headers = dict(headers or {})
         self.ustreamer_config = decode_ustreamer_config(ustreamer_config)
         self.client_info = client_info
         self.transport = transport
@@ -158,6 +164,7 @@ class Session(object):
         self.player_time_ms = 0
         self.playback_cookie = None
         self.backoff_ms = 0
+        self.resolution = 0
         self.finished = False
         # header_id is only meaningful within one response, so it is rebuilt
         # every round rather than kept.
@@ -196,7 +203,13 @@ class Session(object):
                 bool(header['is_init_seg']))
 
     def _request_body(self):
-        state = msg.ClientAbrState.encode(self.player_time_ms, self.track_types)
+        # A cold start says nothing about formats, buffers or position: it is
+        # the difference between "I have played nothing" and "I am at 0ms",
+        # and the server treats them differently.
+        cold = self.rounds <= 1 and not any(f.segments for f in self.formats)
+        state = msg.ClientAbrState.encode(
+            self.player_time_ms, self.track_types,
+            resolution=self.resolution, cold_start=cold)
         context = msg.StreamerContext.encode(
             self.client_info,
             po_token=self.po_token,
@@ -229,14 +242,15 @@ class Session(object):
                 start_segment,
                 have,
             ))
-        selected = [fmt.format_id for fmt in self.formats if fmt.requested]
+        selected = [] if cold else [f.format_id for f in self.formats
+                                    if f.requested]
         return msg.VideoPlaybackAbrRequest.encode(
             state,
             self.ustreamer_config,
             context,
-            player_time_ms=self.player_time_ms,
+            player_time_ms=0 if cold else self.player_time_ms,
             selected_format_ids=selected,
-            buffered_ranges=buffered,
+            buffered_ranges=[] if cold else buffered,
             preferred_audio=[f.format_id for f in self.formats
                              if f.is_audio and f.requested],
             preferred_video=[f.format_id for f in self.formats
@@ -254,7 +268,8 @@ class Session(object):
         self.rounds += 1
         self._headers = {}
         body = self._request_body()
-        headers = {'Content-Type': 'application/x-protobuf'}
+        headers = dict(self.headers)
+        headers['Content-Type'] = 'application/x-protobuf'
         raw = self.transport(self.url, body, headers)
 
         reader = ump.Reader()

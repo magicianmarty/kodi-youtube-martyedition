@@ -297,3 +297,115 @@ class TestNextRequestPolicy(unittest.TestCase):
     def test_a_policy_without_a_cookie_is_not_an_error(self):
         policy = msg.NextRequestPolicy.decode(pb.encode([(1, 15000)]))
         self.assertIsNone(policy['playback_cookie'])
+
+
+class TestAdapter(unittest.TestCase):
+    """Building a session from what the add-on already holds."""
+
+    RESPONSE = {
+        'streamingData': {
+            'serverAbrStreamingUrl': 'https://example/videoplayback/abr',
+            'adaptiveFormats': [
+                {'itag': 394, 'lastModified': '111', 'mimeType': 'video/mp4'},
+                {'itag': 251, 'lastModified': '222', 'mimeType': 'audio/webm',
+                 'xtags': 'abc'},
+            ],
+        },
+        'playerConfig': {'mediaCommonConfig': {
+            'mediaUstreamerRequestConfig': {
+                'videoPlaybackUstreamerConfig': 'Zm9v'}}},
+    }
+
+    CLIENT = {
+        '_id': {'client_id': 28, 'client_version': '1.65.10'},
+        'json': {'context': {'client': {
+            'clientName': 'ANDROID_VR', 'clientVersion': '1.65.10',
+            'osName': 'Android', 'osVersion': '14',
+            'deviceMake': 'Oculus', 'deviceModel': 'Quest 3',
+            'androidSdkVersion': '34'}}},
+    }
+
+    def adapter(self):
+        from youtube_plugin.sabr import adapter
+        return adapter
+
+    def test_a_response_without_the_endpoint_is_not_streamable(self):
+        self.assertFalse(self.adapter().supports_sabr({'streamingData': {}}))
+        self.assertFalse(self.adapter().supports_sabr({}))
+
+    def test_a_complete_response_is(self):
+        self.assertTrue(self.adapter().supports_sabr(self.RESPONSE))
+
+    def test_only_a_video_preference_is_named(self):
+        """
+        SABR picks the audio track itself. Naming a specific audio itag gets
+        policy parts and no media, which is the failure this guards.
+        """
+        formats = self.adapter().pick_formats(self.RESPONSE, itag=394)
+        self.assertEqual([394], [f.itag for f in formats])
+
+    def test_audio_is_named_only_when_explicitly_asked_for(self):
+        formats = self.adapter().pick_formats(self.RESPONSE, itag=394,
+                                              audio_itag=251)
+        self.assertEqual([394, 251], [f.itag for f in formats])
+        self.assertTrue([f for f in formats if f.itag == 251][0].is_audio)
+
+    def test_the_session_carries_the_add_ons_headers(self):
+        """
+        Authorization has to reach the SABR endpoint too. A player call made
+        while signed in and a stream fetched anonymously are two different
+        users as far as YouTube is concerned.
+        """
+        session = self.adapter().session_for(
+            self.RESPONSE, self.CLIENT, lambda url, body, headers: b'',
+            headers={'Authorization': 'Bearer xyz'}, itag=394)
+        self.assertEqual('Bearer xyz', session.headers['Authorization'])
+
+    def test_the_transport_receives_those_headers(self):
+        seen = {}
+
+        def transport(url, body, headers):
+            seen.update(headers)
+            return b''
+
+        session = self.adapter().session_for(
+            self.RESPONSE, self.CLIENT, transport,
+            headers={'Authorization': 'Bearer xyz'}, itag=394)
+        session.fetch()
+        self.assertEqual('Bearer xyz', seen['Authorization'])
+        self.assertEqual('application/x-protobuf', seen['Content-Type'])
+
+    def test_the_ustreamer_config_is_decoded_from_base64(self):
+        session = self.adapter().session_for(
+            self.RESPONSE, self.CLIENT, lambda url, body, headers: b'',
+            itag=394)
+        self.assertEqual(b'foo', session.ustreamer_config)
+
+    def test_an_unstreamable_response_yields_no_session(self):
+        self.assertIsNone(self.adapter().session_for(
+            {'streamingData': {}}, self.CLIENT, lambda u, b, h: b''))
+
+
+class TestColdStart(unittest.TestCase):
+    def test_the_first_request_omits_position_and_buffers(self):
+        """
+        "I have played nothing" and "I am at 0ms" are different statements,
+        and the server treats them differently.
+        """
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'')
+        fields = pb.decode(session._request_body())
+        self.assertNotIn(msg.VideoPlaybackAbrRequest.SELECTED_FORMAT_IDS, fields)
+        self.assertNotIn(msg.VideoPlaybackAbrRequest.BUFFERED_RANGES, fields)
+
+    def test_later_requests_name_the_selected_format(self):
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'')
+        fmt = sabr.Format(394, 1)
+        fmt.requested = True
+        fmt.accept({'sequence_number': 1, 'is_init_seg': False,
+                    'duration_ms': 0, 'start_ms': 0}, b'x')
+        session.formats = [fmt]
+        session.rounds = 2
+        fields = pb.decode(session._request_body())
+        self.assertIn(msg.VideoPlaybackAbrRequest.SELECTED_FORMAT_IDS, fields)

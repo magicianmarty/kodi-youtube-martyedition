@@ -56,11 +56,28 @@ class ClientAbrState(object):
     TRACKS_VIDEO_ONLY = 2
     TRACKS_AUDIO_AND_VIDEO = 3
 
+    STICKY_RESOLUTION = 21
+    LAST_MANUAL_SELECTED_RESOLUTION = 16
+    VISIBILITY = 34
+    DRC_ENABLED = 46
+
     @staticmethod
-    def encode(player_time_ms, track_types, bandwidth=None):
+    def encode(player_time_ms, track_types, bandwidth=None, resolution=None,
+               cold_start=False):
+        """
+        A cold start omits the play head: the first request has not played
+        anything, and saying "I am at 0ms" is not the same as saying nothing.
+        """
         return pb.encode([
-            (ClientAbrState.BANDWIDTH_ESTIMATE, int(bandwidth) if bandwidth else None),
-            (ClientAbrState.PLAYER_TIME_MS, int(player_time_ms)),
+            (ClientAbrState.LAST_MANUAL_SELECTED_RESOLUTION,
+             int(resolution) if resolution else None),
+            (ClientAbrState.BANDWIDTH_ESTIMATE,
+             int(bandwidth) if bandwidth else None),
+            (ClientAbrState.STICKY_RESOLUTION,
+             int(resolution) if resolution else None),
+            (ClientAbrState.PLAYER_TIME_MS,
+             None if cold_start else int(player_time_ms)),
+            (ClientAbrState.VISIBILITY, 0),
             (ClientAbrState.ENABLED_TRACK_TYPES, int(track_types)),
         ])
 
