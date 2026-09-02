@@ -54,7 +54,30 @@ class StreamServer(object):
         response.raise_for_status()
         return response.headers.get('ETag'), response.content
 
-    def _player_response(self, video_id, po_token=None):
+    def _note(self, message):
+        if self.log:
+            self.log.info('SABR: {0}'.format(message))
+
+    def _visitor_data(self, video_id):
+        """
+        The visitor id this session is known by.
+
+        Taken from a player response rather than invented: the token has to
+        be bound to the same identity the request carries, and the add-on's
+        own visitor data is not exposed on the client spec.
+        """
+        held = getattr(self.client, '_visitor_data', None)
+        if isinstance(held, dict):
+            current = held.get(getattr(self.client, '_visitor_data_key',
+                                       'current'))
+            if current:
+                return current
+        response = self._player_response(video_id)
+        if not response:
+            return None
+        return (response.get('responseContext') or {}).get('visitorData')
+
+    def _player_response(self, video_id, po_token=None, visitor_data=None):
         """
         Ask for the player response as the add-on's authenticated client.
 
@@ -65,7 +88,10 @@ class StreamServer(object):
         json_data = {'videoId': video_id}
         if po_token:
             json_data['serviceIntegrityDimensions'] = {'poToken': po_token}
-        spec = self.client.build_client(CLIENT_NAME, {'json': json_data})
+        client_data = {'json': json_data}
+        if visitor_data:
+            client_data['_visitor_data'] = visitor_data
+        spec = self.client.build_client(CLIENT_NAME, client_data)
         if not spec:
             return None
         return self.client.request(
@@ -110,19 +136,33 @@ class StreamServer(object):
             if existing is not None:
                 return existing
 
+            # The token has to be bound to whatever identifies this
+            # session, and that is the visitor data - not the video id. A
+            # token bound to the wrong thing is not rejected with an error;
+            # the player response simply comes back LOGIN_REQUIRED, "sign in
+            # to confirm you're not a bot", exactly as if no token were sent.
+            visitor_data = self._visitor_data(video_id)
             po_token = None
             if self.po_token_source:
                 try:
-                    po_token = self.po_token_source(video_id)
+                    po_token = self.po_token_source(visitor_data or video_id)
                 except Exception:
                     po_token = None
 
-            response = self._player_response(video_id, po_token)
-            if not response or not adapter.supports_sabr(response):
+            response = self._player_response(video_id, po_token, visitor_data)
+            spec = self.client.build_client(CLIENT_NAME) or {}
+            if not response:
+                self._note('no player response for {0}'.format(video_id))
+                self._streams[key] = None
+                return None
+            if not adapter.supports_sabr(response):
+                status = (response.get('playabilityStatus') or {}).get('status')
+                self._note('{0}: no serverAbrStreamingUrl (status {1!r}, '
+                           'token {2})'.format(video_id, status,
+                                               'yes' if po_token else 'no'))
                 self._streams[key] = None
                 return None
 
-            spec = self.client.build_client(CLIENT_NAME) or {}
             session = adapter.session_for(
                 response,
                 spec,
@@ -134,7 +174,28 @@ class StreamServer(object):
             if session is None:
                 self._streams[key] = None
                 return None
-            stream = ByteStream(session, int(itag))
+
+            # Size and duration for this exact format, so the play head can
+            # be derived from a byte offset even when the track never gets
+            # its own segment metadata.
+            content_length = duration_ms = 0
+            for entry in (response.get('streamingData') or {}).get(
+                    'adaptiveFormats') or ():
+                if entry.get('itag') == int(itag):
+                    content_length = int(entry.get('contentLength') or 0)
+                    duration_ms = int(entry.get('approxDurationMs') or 0)
+                    break
+            if not duration_ms:
+                duration_ms = int(1000 * float(
+                    (response.get('videoDetails') or {}).get('lengthSeconds')
+                    or 0))
+
+            stream = ByteStream(session, int(itag),
+                                content_length=content_length,
+                                duration_ms=duration_ms)
+            self._note('serving itag {0} of {1} over SABR '
+                       '({2} bytes, {3}ms)'.format(itag, video_id,
+                                                   content_length, duration_ms))
             self._streams[key] = stream
             return stream
 
@@ -148,7 +209,11 @@ class StreamServer(object):
             stream = self.stream_for(video_id, itag)
             if stream is None:
                 return None
-            return stream.read(offset, length)
+            data = stream.read(offset, length)
+            if not data:
+                self._note('itag {0} returned nothing at offset {1}'
+                           .format(itag, offset))
+            return data
         except Exception:
             if self.log:
                 self.log.exception('SABR: falling back to the range proxy')

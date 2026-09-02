@@ -508,3 +508,92 @@ class TestByteStream(unittest.TestCase):
         stream = self.stream({0: b'AAAA'})
         stream.max_rounds = 1
         self.assertEqual(b'AAAA', stream.read(0, 100))
+
+
+class TestPlayHeadFromBytes(unittest.TestCase):
+    """
+    The play head has to be derivable from a byte offset alone.
+
+    A track that never receives FormatInitializationMetadata has no segment
+    length to count in. If that leaves the head at zero the server treats its
+    opening grant as unconsumed and sends nothing further, and the track
+    starves silently - which, when it is the video track and audio has a
+    working timeline, is a frozen picture over continuing sound.
+    """
+
+    def stream(self, **kwargs):
+        from youtube_plugin.sabr import bytestream
+        fmt = sabr.Format(394, 1)
+        fmt.offsets = {0: b'init', 4: b'one'}
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'')
+        session.formats = [fmt]
+        return bytestream.ByteStream(session, 394, **kwargs)
+
+    def test_byte_offsets_map_to_time_without_any_segment_metadata(self):
+        stream = self.stream(content_length=1000, duration_ms=100000)
+        self.assertEqual(0, stream.position_ms(0))
+        self.assertEqual(25000, stream.position_ms(250))
+        self.assertEqual(50000, stream.position_ms(500))
+
+    def test_the_head_never_runs_past_the_end(self):
+        stream = self.stream(content_length=1000, duration_ms=100000)
+        self.assertEqual(100000, stream.position_ms(5000))
+
+    def test_without_size_or_duration_it_falls_back_to_segments(self):
+        stream = self.stream()
+        stream.session.formats[0].total_duration_ms = 100000
+        stream.session.formats[0].end_segment_number = 10
+        self.assertEqual(0, stream.position_ms(4))
+
+    def test_a_track_with_no_timeline_of_its_own_borrows_the_sessions(self):
+        """
+        Video regularly gets no metadata while audio does; the segmentation
+        is shared, so the video track can count in the audio track's units.
+        """
+        from youtube_plugin.sabr import bytestream
+        video = sabr.Format(394, 1)
+        video.offsets = {0: b'init', 4: b'one', 8: b'two'}
+        audio = sabr.Format(251, 1)
+        audio.total_duration_ms = 100000
+        audio.end_segment_number = 10
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'')
+        session.formats = [video, audio]
+        stream = bytestream.ByteStream(session, 394)
+        self.assertEqual(0, video.segment_duration_ms)
+        self.assertEqual(10000, session.segment_duration_ms)
+        self.assertEqual(10000, stream.position_ms(8))
+
+
+class TestReadingBeforeAnythingArrives(unittest.TestCase):
+    """
+    The first read of a stream happens before a single segment exists, so
+    that path has to be correct or SABR never serves at all - it throws, the
+    proxy falls back, and playback quietly reverts to the 60s ceiling while
+    looking like the bug it was meant to fix.
+    """
+
+    def stream(self, pieces=None):
+        from youtube_plugin.sabr import bytestream
+        fmt = sabr.Format(394, 1)
+        fmt.offsets = dict(pieces or {})
+        session = sabr.Session('http://example', b'cfg', b'ci',
+                               lambda url, body, headers: b'')
+        session.formats = [fmt]
+        stream = bytestream.ByteStream(session, 394)
+        stream.max_rounds = 0
+        return stream
+
+    def test_reading_an_empty_stream_returns_nothing(self):
+        self.assertEqual(b'', self.stream().read(0, 100))
+
+    def test_reading_before_the_first_piece_returns_nothing(self):
+        """
+        Not the last piece: a negative list index is legal Python and would
+        read from the wrong end of the stream.
+        """
+        self.assertEqual(b'', self.stream({100: b'later'}).read(0, 10))
+
+    def test_reading_from_the_first_piece_still_works(self):
+        self.assertEqual(b'later', self.stream({100: b'later'}).read(100, 5))
