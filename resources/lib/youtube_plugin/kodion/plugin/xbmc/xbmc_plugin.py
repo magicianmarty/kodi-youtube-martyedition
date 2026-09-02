@@ -305,9 +305,16 @@ class XbmcPlugin(AbstractPlugin):
         if items:
             content_type = options.get(provider.CONTENT_TYPE)
             if content_type:
-                context.apply_content(**content_type)
+                view = context.apply_content(**content_type)
             else:
-                context.apply_content()
+                view = context.apply_content()
+            # Queued rather than executed here: SetViewMode applies to whatever
+            # container is current, and this one does not exist until
+            # endOfDirectory. post_run waits for it to be ready, which is the
+            # difference between setting this listing's view and silently
+            # changing the previous screen's.
+            if view:
+                post_run_actions.append('Container.SetViewMode({0})'.format(view))
             succeeded = xbmcplugin.addDirectoryItems(
                 handle, items, len(items)
             )

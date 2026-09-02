@@ -547,6 +547,10 @@ def playback_item(context, media_item, show_fanart=None, **_kwargs):
     art = {'icon': image}
     if image:
         art['thumb'] = image
+        # YouTube art is 16:9. Skins ask for 'landscape' when they want wide
+        # art and fall back to the icon when it is missing, which is how a
+        # thumbnail-per-item listing ended up rendering as a row of glyphs.
+        art['landscape'] = image
     if show_fanart:
         art['fanart'] = media_item.get_fanart()
     list_item.setArt(art)
@@ -629,6 +633,10 @@ def directory_listitem(context, directory_item, show_fanart=None, **_kwargs):
     art = {'icon': image}
     if image:
         art['thumb'] = image
+        # YouTube art is 16:9. Skins ask for 'landscape' when they want wide
+        # art and fall back to the icon when it is missing, which is how a
+        # thumbnail-per-item listing ended up rendering as a row of glyphs.
+        art['landscape'] = image
         art['poster'] = image
     if show_fanart:
         art['fanart'] = directory_item.get_fanart()
@@ -665,6 +673,10 @@ def image_listitem(context, image_item, show_fanart=None, **_kwargs):
     art = {'icon': image}
     if image:
         art['thumb'] = image
+        # YouTube art is 16:9. Skins ask for 'landscape' when they want wide
+        # art and fall back to the icon when it is missing, which is how a
+        # thumbnail-per-item listing ended up rendering as a row of glyphs.
+        art['landscape'] = image
     if show_fanart:
         art['fanart'] = image_item.get_fanart()
     list_item.setArt(art)
@@ -777,6 +789,10 @@ def media_listitem(context,
     art = {'icon': image}
     if image:
         art['thumb'] = image
+        # YouTube art is 16:9. Skins ask for 'landscape' when they want wide
+        # art and fall back to the icon when it is missing, which is how a
+        # thumbnail-per-item listing ended up rendering as a row of glyphs.
+        art['landscape'] = image
     if show_fanart:
         art['fanart'] = media_item.get_fanart()
     list_item.setArt(art)

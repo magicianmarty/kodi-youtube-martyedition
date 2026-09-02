@@ -45,6 +45,7 @@ from ...constants import (
 from ...json_store import APIKeyStore, AccessManager
 from ...player import XbmcPlaylistPlayer
 from ...settings import XbmcPluginSettings
+from ... import views
 from ...ui import XbmcContextUI
 from ...utils.file_system import make_dirs
 from ...utils.methods import (
@@ -749,12 +750,15 @@ class XbmcContext(AbstractContext):
         # noinspection PyUnusedLocal
         ui = self.get_ui()
 
+        view = None
         if content_type:
             self.log.debug('Applying content-type: {type!r} for {path!r}',
                            type=(sub_type or content_type),
                            path=self.get_path())
             if content_type != 'default':
                 xbmcplugin.setContent(self._plugin_handle, content_type)
+                if self.get_settings().use_default_view():
+                    view = views.view_for(xbmc.getSkinDir(), content_type)
 
         if category_label is None:
             category_label = self.get_param('category_label')
@@ -792,6 +796,8 @@ class XbmcContext(AbstractContext):
                 if detailed_labels else
                 SORT.LIST_CONTENT_SIMPLE
             )
+
+        return view
 
     if current_system_version.compatible(19):
         def add_sort_method(self,

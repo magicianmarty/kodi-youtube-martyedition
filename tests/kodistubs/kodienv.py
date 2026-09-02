@@ -130,8 +130,12 @@ class KodiEnv(object):
         self.power_calls = []
 
         # xbmcaddon settings store, shared by every Addon() instance the way
-        # Kodi's own settings store is
-        self.settings = {}
+        # Kodi's own settings store is. Seeded from the real settings.xml,
+        # because Kodi answers an unset setting with the default declared
+        # there - a stub that answers "" instead reports every unset boolean
+        # as False, which is indistinguishable from a setting deliberately
+        # turned off.
+        self.settings = self._setting_defaults()
 
         self.infolabels = {
             "System.BuildVersion": "21.2 (21.2.0) Git:20250101-abcdef1",
@@ -193,6 +197,25 @@ class KodiEnv(object):
         self.language = "en_gb"
 
     # --------------------------------------------------------------- helpers
+    @staticmethod
+    def _setting_defaults():
+        """Every <setting id> in resources/settings.xml, at its declared default."""
+        path = os.path.join(REPO_ROOT, "resources", "settings.xml")
+        try:
+            with open(path, "r", encoding="utf-8") as fp:
+                raw = fp.read()
+        except (IOError, OSError):
+            return {}
+
+        defaults = {}
+        for match in re.finditer(
+                r'<setting\s+id="([^"]+)"(.*?)</setting>', raw, re.S):
+            setting_id, body = match.group(1), match.group(2)
+            default = re.search(r"<default>(.*?)</default>", body, re.S)
+            if default:
+                defaults[setting_id] = default.group(1).strip()
+        return defaults
+
     @staticmethod
     def _addon_attr(attr, fallback):
         """Pull an <addon> attribute straight out of the working tree's addon.xml."""

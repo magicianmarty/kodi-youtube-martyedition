@@ -97,6 +97,7 @@ LABEL_COLOR = 'youtube.view.label.color'  # (str)
 THUMB_SIZE = 'kodion.thumbnail.size'  # (int)
 THUMB_SIZE_BEST = 2
 FANART_SELECTION = 'kodion.fanart.selection'  # (int)
+DEFAULT_VIEW = 'kodion.view.default'  # (bool)
 FANART_CHANNEL = 2
 FANART_THUMBNAIL = 3
 

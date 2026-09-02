@@ -924,6 +924,11 @@
                     </constraints>
                     <control format="string" type="spinner"/>
                 </setting>
+                <setting id="kodion.view.default" type="boolean" label="30825" help="30826">
+                    <level>0</level>
+                    <default>true</default>
+                    <control type="toggle"/>
+                </setting>
                 <setting id="kodion.fanart.selection" type="integer" label="30021" help="">
                     <level>0</level>
                     <default>2</default>  <!-- channel fanart -->

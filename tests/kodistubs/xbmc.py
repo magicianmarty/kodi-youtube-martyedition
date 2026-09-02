@@ -14,6 +14,11 @@ DRIVE_NOT_READY = 1
 TRAY_CLOSED_NO_MEDIA = 64
 TRAY_CLOSED_MEDIA_PRESENT = 96
 
+# getLanguage() format codes.
+ISO_639_1 = 0
+ISO_639_2 = 1
+ENGLISH_NAME = 2
+
 
 def log(msg, level=LOGDEBUG):
     ENV.log(msg, level)

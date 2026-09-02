@@ -98,6 +98,9 @@ class AbstractSettings(object):
     def fanart_selection(self):
         return self.get_int(SETTINGS.FANART_SELECTION, 2)
 
+    def use_default_view(self):
+        return self.get_bool(SETTINGS.DEFAULT_VIEW, True)
+
     def cache_size(self, value=None):
         if value is not None:
             return self.set_int(SETTINGS.CACHE_SIZE, value)
