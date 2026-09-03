@@ -100,6 +100,7 @@ FANART_SELECTION = 'kodion.fanart.selection'  # (int)
 DEFAULT_VIEW = 'kodion.view.default'  # (bool)
 SABR_ENABLED = 'kodion.sabr.enabled'  # (bool)
 CHANNEL_ON_TILES = 'kodion.channel.on.tiles'  # (bool)
+RETURN_TO_LISTING = 'kodion.return.to.listing'  # (bool)
 POT_PROVIDER_URL = 'kodion.pot.provider.url'  # (str)
 FANART_CHANNEL = 2
 FANART_THUMBNAIL = 3

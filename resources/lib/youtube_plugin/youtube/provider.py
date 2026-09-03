@@ -1404,6 +1404,22 @@ class Provider(AbstractProvider):
             provider.CACHE_TO_DISC: False,
         }
 
+        # The play queue, when there is one.
+        #
+        # Queueing already worked - it is on every video's context menu - but
+        # a context menu is invisible from the sofa, so nothing ever said a
+        # queue existed or what was in it. This is the part that was missing.
+        queue_size = context.get_playlist_player().size()
+        if queue_size:
+            queue_label = localize(30835)
+            result.append(DirectoryItem(
+                bold('{0} ({1})'.format(queue_label, queue_size)),
+                'command://ActivateWindow(VideoPlaylist)',
+                image='{media}/playlist.png',
+                action=True,
+                category_label=queue_label,
+            ))
+
         # sign in
         if ((not logged_in or logged_in == 'partially')
                 and settings_bool(settings.SHOW_SIGN_IN, True)):

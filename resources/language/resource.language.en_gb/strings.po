@@ -1636,3 +1636,15 @@ msgstr ""
 msgctxt "#30832"
 msgid "Puts the channel name where the skin will actually draw it. Turn this off to show view and like counts there instead."
 msgstr ""
+
+msgctxt "#30833"
+msgid "Return to the listing when a video ends"
+msgstr ""
+
+msgctxt "#30834"
+msgid "Kodi normally returns to whatever window is underneath, which on a box where another add-on owns the home screen means finishing a video drops you into that add-on."
+msgstr ""
+
+msgctxt "#30835"
+msgid "Play queue"
+msgstr ""

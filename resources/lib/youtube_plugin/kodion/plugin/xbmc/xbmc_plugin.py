@@ -39,6 +39,7 @@ from ...constants import (
     WINDOW_FALLBACK,
     WINDOW_REPLACE,
     WINDOW_RETURN,
+    LAST_LISTING,
 )
 from ...exceptions import KodionException
 from ...items import (
@@ -315,6 +316,12 @@ class XbmcPlugin(AbstractPlugin):
             # changing the previous screen's.
             if view:
                 post_run_actions.append('Container.SetViewMode({0})'.format(view))
+
+            # Remember where the user is, so playback can come back to it.
+            # The listing is built in the plugin process and playback ends in
+            # the service process, so this has to travel through a window
+            # property rather than a variable.
+            ui.set_property(LAST_LISTING, context.get_uri())
             succeeded = xbmcplugin.addDirectoryItems(
                 handle, items, len(items)
             )

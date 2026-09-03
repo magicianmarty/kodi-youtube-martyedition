@@ -160,6 +160,7 @@ WINDOW_CACHE = 'window_cache'
 WINDOW_FALLBACK = 'window_fallback'
 WINDOW_REPLACE = 'window_replace'
 WINDOW_RETURN = 'window_return'
+LAST_LISTING = 'last_listing'
 
 # Plugin url query parameters
 ACTION = 'action'
@@ -322,6 +323,7 @@ __all__ = (
     'WINDOW_FALLBACK',
     'WINDOW_REPLACE',
     'WINDOW_RETURN',
+    'LAST_LISTING',
 
     # Plugin url query parameters
     'ACTION',

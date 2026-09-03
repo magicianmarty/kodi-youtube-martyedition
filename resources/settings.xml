@@ -924,6 +924,11 @@
                     </constraints>
                     <control format="string" type="spinner"/>
                 </setting>
+                <setting id="kodion.return.to.listing" type="boolean" label="30833" help="30834">
+                    <level>0</level>
+                    <default>true</default>
+                    <control type="toggle"/>
+                </setting>
                 <setting id="kodion.channel.on.tiles" type="boolean" label="30831" help="30832">
                     <level>0</level>
                     <default>true</default>

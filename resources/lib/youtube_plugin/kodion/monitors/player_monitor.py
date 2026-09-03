@@ -14,8 +14,10 @@ import threading
 from .. import logging
 from ..compatibility import xbmc
 from ..constants import (
+    ADDON_ID,
     BUSY_FLAG,
     CHANNEL_ID,
+    LAST_LISTING,
     PATHS,
     PLAYBACK_STARTED,
     PLAYBACK_STOPPED,
@@ -471,8 +473,34 @@ class PlayerMonitor(xbmc.Player):
         ui.pop_property(PLAY_USING)
         ui.clear_property(TRAKT_PAUSE_FLAG, raw=True)
 
+        self._return_to_listing()
+
         self.stop_threads()
         self.cleanup_threads()
+
+    def _return_to_listing(self):
+        """
+        Go back to the listing playback started from.
+
+        Kodi returns to whatever window is underneath, which is only the
+        right answer when that is one of ours. On a box where another add-on
+        owns the home screen, finishing a video drops the viewer into that
+        add-on instead - it reads as a crash rather than as the end of a
+        video.
+        """
+        try:
+            if not self._context.get_settings().return_to_listing():
+                return
+            current = xbmc.getInfoLabel('Container.FolderPath') or ''
+            if current.startswith('plugin://%s' % ADDON_ID):
+                return
+            listing = self._ui.get_property(LAST_LISTING)
+            if not listing or not listing.startswith('plugin://%s' % ADDON_ID):
+                return
+            xbmc.executebuiltin('ActivateWindow(videos,{0},return)'.format(
+                listing))
+        except Exception:
+            self.log.exception('Could not return to the listing')
 
     def onPlayBackStopped(self):
         self.onPlayBackEnded()

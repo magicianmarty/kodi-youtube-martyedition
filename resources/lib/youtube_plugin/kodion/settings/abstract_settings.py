@@ -101,6 +101,9 @@ class AbstractSettings(object):
     def use_default_view(self):
         return self.get_bool(SETTINGS.DEFAULT_VIEW, True)
 
+    def return_to_listing(self):
+        return self.get_bool(SETTINGS.RETURN_TO_LISTING, True)
+
     def channel_on_tiles(self):
         return self.get_bool(SETTINGS.CHANNEL_ON_TILES, True)
 
