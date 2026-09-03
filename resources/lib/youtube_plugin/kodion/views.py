@@ -29,6 +29,9 @@ VIEWS = {
         # Videos only. Menus are glyphs rather than artwork, and a wall of
         # glyphs is worse than the list it replaced, so they keep the skin's
         # own default until there is a reason to think otherwise.
+        # Wall, not InfoWall (54): InfoWall fits four across but spends the
+        # left third of the screen on an empty info panel, so the tiles end
+        # up no larger and the screen mostly emptier. Compared on the box.
         'videos': 500,
     },
 }

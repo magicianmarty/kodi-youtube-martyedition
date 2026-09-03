@@ -99,6 +99,7 @@ THUMB_SIZE_BEST = 2
 FANART_SELECTION = 'kodion.fanart.selection'  # (int)
 DEFAULT_VIEW = 'kodion.view.default'  # (bool)
 SABR_ENABLED = 'kodion.sabr.enabled'  # (bool)
+CHANNEL_ON_TILES = 'kodion.channel.on.tiles'  # (bool)
 POT_PROVIDER_URL = 'kodion.pot.provider.url'  # (str)
 FANART_CHANNEL = 2
 FANART_THUMBNAIL = 3

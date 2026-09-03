@@ -989,6 +989,19 @@ def update_video_items(provider, context, video_id_dict,
         # channel name
         channel_name = snippet.get('channelTitle', '') or untitled
         media_item.add_artist(channel_name)
+        # Also as label2, which is what actually reaches the screen: Estuary
+        # draws ListItem.Label2 on the thumbnail in its wall views, while the
+        # artist list it is already stored in is not shown there at all. The
+        # stats that were here are still available in the plot and, on a
+        # detailed sort, in the label mask.
+        if settings.channel_on_tiles():
+            media_item.set_short_details(channel_name)
+            # The label mask is what actually appears under a tile - the
+            # add-on routes extra detail there through the production code
+            # field. Stats were occupying it, which is why tiles read
+            # "Title * 201K | 4.44K | 234" and never said whose channel it
+            # was. The stats remain in the plot.
+            media_item.set_production_code(channel_name)
 
         # plot
         description = strip_html_from_text(localised_info.get('description')

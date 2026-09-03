@@ -924,6 +924,11 @@
                     </constraints>
                     <control format="string" type="spinner"/>
                 </setting>
+                <setting id="kodion.channel.on.tiles" type="boolean" label="30831" help="30832">
+                    <level>0</level>
+                    <default>true</default>
+                    <control type="toggle"/>
+                </setting>
                 <setting id="kodion.sabr.enabled" type="boolean" label="30827" help="30828">
                     <level>0</level>
                     <default>false</default>

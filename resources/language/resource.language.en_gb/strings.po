@@ -1628,3 +1628,11 @@ msgstr ""
 msgctxt "#30830"
 msgid "Address of a bgutil POT provider, for example http://192.168.1.10:4416. Without one YouTube may refuse playback with \"Sign in to confirm you are not a bot\"."
 msgstr ""
+
+msgctxt "#30831"
+msgid "Show the channel name on tiles"
+msgstr ""
+
+msgctxt "#30832"
+msgid "Puts the channel name where the skin will actually draw it. Turn this off to show view and like counts there instead."
+msgstr ""
