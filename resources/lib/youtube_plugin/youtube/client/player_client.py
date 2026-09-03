@@ -861,14 +861,25 @@ class YouTubePlayerClient(YouTubeDataClient):
                 'tv_unplugged',
                 'tv',
             )),
+            # First of the stream-providing clients, because it is the only
+            # one whose URLs are not truncated after about a minute. The
+            # others here serve the opening 60s and then answer 403 - which
+            # is the frozen picture, and is not fixable by asking them more
+            # politely.
+            ('auth_disabled|no_kids|av1|vp9.2|avc1|surround_sound', (
+                'visionos',
+            )),
             ('auth_disabled|kids|av1|vp9|vp9.2|avc1|stereo_sound|multi_audio', (
                 'ios_testsuite_params',
             )),
             ('auth_disabled|kids|av1|vp9.2|avc1|surround_sound|multi_audio', (
                 'android_testsuite_params',
             )),
+            # android_vr is deliberately not here. It offers the highest
+            # quality streams, so its URLs win the selection - and its URLs
+            # are the ones that stop serving after about a minute. Leaving it
+            # in means every video freezes, whatever else is configured.
             ('auth_enabled|no_kids|av1|vp9.2|avc1|surround_sound', (
-                'android_vr',
             )),
             ('mpd', (
             )),

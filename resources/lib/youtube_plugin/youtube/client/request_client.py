@@ -77,6 +77,47 @@ class YouTubeRequestClient(BaseRequestsClass):
                 'X-YouTube-Client-Version': '{_id[client_version]}',
             },
         },
+        # The one client whose stream URLs are not cut off after a minute.
+        #
+        # Everything else tested here - android_vr, ios, android, tv, web -
+        # serves roughly the first 60 seconds of a video and then answers 403,
+        # whatever is asked of it. visionos hands back ordinary URLs that read
+        # correctly at 25%, 50%, 90% and the end of a 2.1GB 4K stream, offers
+        # up to 2160p, and needs no proof-of-origin token to do it.
+        'visionos': {
+            '_id': {
+                'client_id': 101,
+                'client_name': 'VISIONOS',
+                'client_version': '1.02',
+                'device_make': 'Apple',
+                'device_model': 'RealityDevice17,1',
+                'os_name': 'visionOS',
+                'os_version': '26.5.23O471',
+            },
+            '_auth_type': False,
+            'json': {
+                'context': {
+                    'client': {
+                        'clientName': '{_id[client_name]}',
+                        'clientVersion': '{_id[client_version]}',
+                        'deviceMake': '{_id[device_make]}',
+                        'deviceModel': '{_id[device_model]}',
+                        'osName': '{_id[os_name]}',
+                        'osVersion': '{_id[os_version]}',
+                    },
+                },
+            },
+            'headers': {
+                'Origin': BASE_URL,
+                'User-Agent': (
+                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3)'
+                    ' AppleWebKit/605.1.15 (KHTML, like Gecko)'
+                    ' Version/26.0 Safari/605.1.15'
+                ),
+                'X-YouTube-Client-Name': '{_id[client_id]}',
+                'X-YouTube-Client-Version': '{_id[client_version]}',
+            },
+        },
         'android_vr': {
             '_id': {
                 'client_id': 28,

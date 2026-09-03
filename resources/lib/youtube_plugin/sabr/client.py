@@ -202,6 +202,11 @@ class Session(object):
         # fresh po_token on the session and return True.
         self.attest = None
         self.attestations = 0
+        # Server-issued state, echoed back on every request. Without it the
+        # session looks stateless to the server, and a stateless session is
+        # asked to attest forever because there is nothing to attest against.
+        self.sabr_context_updates = {}
+        self.sabr_contexts_to_send = set()
         self.finished = False
         # header_id is only meaningful within one response, so it is rebuilt
         # every round rather than kept.
@@ -254,10 +259,19 @@ class Session(object):
         state = msg.ClientAbrState.encode(
             self.player_time_ms, self.track_types,
             resolution=self.resolution, cold_start=cold and not resuming)
+        contexts = [
+            (context_type, update['value'])
+            for context_type, update in sorted(self.sabr_context_updates.items())
+            if context_type in self.sabr_contexts_to_send and update['value']
+        ]
+        unsent = sorted(context_type for context_type in self.sabr_contexts_to_send
+                        if context_type not in self.sabr_context_updates)
         context = msg.StreamerContext.encode(
             self.client_info,
             po_token=self.po_token,
             playback_cookie=self.playback_cookie,
+            sabr_contexts=contexts,
+            unsent_sabr_contexts=unsent,
         )
         # Only report a range for a track whose segmentation the server
         # actually told us. Reporting a borrowed duration is worse than
@@ -369,6 +383,9 @@ class Session(object):
         self.ustreamer_config = decode_ustreamer_config(ustreamer_config)
         self.needs_reload = False
         self.reload_token = None
+        # The ids in these belong to the config being replaced.
+        self.sabr_context_updates.clear()
+        self.sabr_contexts_to_send.clear()
         # A renewed config is a new session to the server, so the next
         # request introduces itself as one.
         self.force_cold = True
@@ -446,6 +463,29 @@ class Session(object):
                 self.playback_cookie = policy['playback_cookie']
             if policy['backoff_ms']:
                 self.backoff_ms = policy['backoff_ms']
+            return 0
+
+        if part_type == ump.SABR_CONTEXT_UPDATE:
+            update = msg.SabrContextUpdate.decode(payload)
+            if not update['type'] or not update['value'] \
+                    or not update['write_policy']:
+                return 0
+            if (update['write_policy'] == msg.SabrContextUpdate.KEEP_EXISTING
+                    and update['type'] in self.sabr_context_updates):
+                return 0
+            self.sabr_context_updates[update['type']] = update
+            if update['send_by_default']:
+                self.sabr_contexts_to_send.add(update['type'])
+            return 0
+
+        if part_type == ump.SABR_CONTEXT_SENDING_POLICY:
+            policy = msg.SabrContextSendingPolicy.decode(payload)
+            for context_type in policy['start']:
+                self.sabr_contexts_to_send.add(context_type)
+            for context_type in policy['stop']:
+                self.sabr_contexts_to_send.discard(context_type)
+            for context_type in policy['discard']:
+                self.sabr_context_updates.pop(context_type, None)
             return 0
 
         if part_type == ump.RELOAD_PLAYER_RESPONSE:

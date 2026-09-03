@@ -101,8 +101,17 @@ class BufferedRange(object):
 
 
 class ClientInfo(object):
+    HL = 1
+    GL = 2
     DEVICE_MAKE = 12
     DEVICE_MODEL = 13
+    # The visitor this session belongs to. The proof-of-origin token is bound
+    # to it, so a request that omits it cannot be matched to the token it
+    # carries - and an unmatched token is answered with ATTESTATION_REQUIRED,
+    # which looks exactly like a rejected token rather than an unidentified
+    # session.
+    VISITOR_DATA = 14
+    USER_AGENT = 15
     CLIENT_NAME = 16
     CLIENT_VERSION = 17
     OS_NAME = 18
@@ -113,15 +122,21 @@ class ClientInfo(object):
 
     @staticmethod
     def encode(client_name, client_version, os_name=None, os_version=None,
-               device_make=None, device_model=None, android_sdk=None):
+               device_make=None, device_model=None, android_sdk=None,
+               visitor_data=None, user_agent=None, language=None, region=None):
         return pb.encode([
+            (ClientInfo.HL, language or None),
+            (ClientInfo.GL, region or None),
             (ClientInfo.DEVICE_MAKE, device_make or None),
             (ClientInfo.DEVICE_MODEL, device_model or None),
+            (ClientInfo.VISITOR_DATA, visitor_data or None),
+            (ClientInfo.USER_AGENT, user_agent or None),
             (ClientInfo.CLIENT_NAME, int(client_name)),
             (ClientInfo.CLIENT_VERSION, client_version),
             (ClientInfo.OS_NAME, os_name or None),
             (ClientInfo.OS_VERSION, os_version or None),
-            (ClientInfo.ANDROID_SDK_VERSION, int(android_sdk) if android_sdk else None),
+            (ClientInfo.ANDROID_SDK_VERSION,
+             int(android_sdk) if android_sdk else None),
         ])
 
 
@@ -130,13 +145,26 @@ class StreamerContext(object):
     PO_TOKEN = 2
     PLAYBACK_COOKIE = 3
 
+    SABR_CONTEXTS = 5
+    UNSENT_SABR_CONTEXTS = 6
+
     @staticmethod
-    def encode(client_info, po_token=None, playback_cookie=None):
-        return pb.encode([
+    def encode(client_info, po_token=None, playback_cookie=None,
+               sabr_contexts=(), unsent_sabr_contexts=()):
+        fields = [
             (StreamerContext.CLIENT_INFO, client_info),
             (StreamerContext.PO_TOKEN, po_token or None),
             (StreamerContext.PLAYBACK_COOKIE, playback_cookie or None),
-        ])
+        ]
+        for context_type, value in sabr_contexts:
+            fields.append((StreamerContext.SABR_CONTEXTS, pb.encode([
+                (1, int(context_type)),
+                (2, value),
+            ])))
+        for context_type in unsent_sabr_contexts:
+            fields.append((StreamerContext.UNSENT_SABR_CONTEXTS,
+                           int(context_type)))
+        return pb.encode(fields)
 
 
 class VideoPlaybackAbrRequest(object):
@@ -292,3 +320,53 @@ class ReloadPlayerResponse(object):
         if isinstance(token, bytes):
             return token.decode('utf-8', 'replace')
         return token or ''
+
+
+class SabrContextUpdate(object):
+    """
+    State the server hands the client to hand back.
+
+    This is the part that makes a session a session. The server issues
+    contexts and expects them echoed in StreamerContext on every subsequent
+    request; a client that drops them looks stateless, and a stateless client
+    is asked to attest over and over because there is nothing to attest
+    against.
+    """
+
+    TYPE = 1
+    SCOPE = 2
+    VALUE = 3
+    SEND_BY_DEFAULT = 4
+    WRITE_POLICY = 5
+
+    OVERWRITE = 1
+    KEEP_EXISTING = 2
+
+    @staticmethod
+    def decode(raw):
+        fields = pb.decode(raw)
+        return {
+            'type': pb.first(fields, SabrContextUpdate.TYPE, 0),
+            'scope': pb.first(fields, SabrContextUpdate.SCOPE, 0),
+            'value': pb.first(fields, SabrContextUpdate.VALUE),
+            'send_by_default': bool(pb.first(
+                fields, SabrContextUpdate.SEND_BY_DEFAULT, 0)),
+            'write_policy': pb.first(fields, SabrContextUpdate.WRITE_POLICY, 0),
+        }
+
+
+class SabrContextSendingPolicy(object):
+    """Which contexts to start sending, stop sending, or throw away."""
+
+    START = 1
+    STOP = 2
+    DISCARD = 3
+
+    @staticmethod
+    def decode(raw):
+        fields = pb.decode(raw)
+        return {
+            'start': list(fields.get(SabrContextSendingPolicy.START) or ()),
+            'stop': list(fields.get(SabrContextSendingPolicy.STOP) or ()),
+            'discard': list(fields.get(SabrContextSendingPolicy.DISCARD) or ()),
+        }

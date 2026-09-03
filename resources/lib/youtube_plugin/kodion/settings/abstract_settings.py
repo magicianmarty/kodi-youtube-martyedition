@@ -102,7 +102,11 @@ class AbstractSettings(object):
         return self.get_bool(SETTINGS.DEFAULT_VIEW, True)
 
     def use_sabr(self):
-        return self.get_bool(SETTINGS.SABR_ENABLED, True)
+        # Off by default. SABR is implemented and works, but it is not what
+        # fixes playback - the client is - and minting a proof-of-origin
+        # token takes tens of seconds on the HTTP server's own thread, which
+        # times the manifest request out and breaks playback entirely.
+        return self.get_bool(SETTINGS.SABR_ENABLED, False)
 
     def pot_provider_url(self):
         return self.get_string(SETTINGS.POT_PROVIDER_URL, '').strip()
