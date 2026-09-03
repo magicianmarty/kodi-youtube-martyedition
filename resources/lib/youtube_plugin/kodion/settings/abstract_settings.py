@@ -502,9 +502,14 @@ class AbstractSettings(object):
         return allow_list
 
     def httpd_sleep_allowed(self, value=None):
+        # Off by default here. Every stream and every manifest is served by
+        # this server, so letting it sleep means the first request of a
+        # playback has to wake it - and when that takes too long the manifest
+        # request times out, playback fails, and the screen drops back to
+        # whatever was underneath. The server costs nothing while idle.
         if value is not None:
             return self.set_bool(SETTINGS.HTTPD_IDLE_SLEEP, value)
-        return self.get_bool(SETTINGS.HTTPD_IDLE_SLEEP, True)
+        return self.get_bool(SETTINGS.HTTPD_IDLE_SLEEP, False)
 
     def httpd_stream_redirect(self, value=None):
         if value is not None:
