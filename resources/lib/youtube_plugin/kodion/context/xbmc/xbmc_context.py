@@ -512,6 +512,14 @@ class XbmcContext(AbstractContext):
         pass  # implement from abstract
 
     def is_plugin_path(self, uri, uri_path='', partial=False):
+        # get_container_info returns False when it cannot find a container to
+        # ask, which happens whenever the add-on runs without one - a widget
+        # row, or a JSON-RPC listing. Callers pass that straight in here, and
+        # a bool has no startswith, so the whole listing died with an
+        # AttributeError and the row came back empty.
+        if not isinstance(uri, str):
+            return False
+
         if isinstance(uri_path, (list, tuple)):
             if partial:
                 paths = [self.create_uri(path).rstrip('/') for path in uri_path]
