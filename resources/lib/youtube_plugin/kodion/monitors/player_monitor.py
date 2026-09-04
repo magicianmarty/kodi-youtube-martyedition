@@ -124,6 +124,17 @@ class PlayerMonitorThread(object):
         video_id_param = 'video_id=%s' % video_id
         report_url = use_remote_history and playback_stats.get('watchtime_url')
 
+        # Sponsor segments, looked up once now that the video is playing so a
+        # slow lookup cannot hold up the start. Most videos have none.
+        sponsors = []
+        if settings.skip_sponsors():
+            from ..sponsorblock import fetch as fetch_sponsors
+            sponsors = fetch_sponsors(video_id)
+            if sponsors:
+                log.debug('SponsorBlock: {n} segment(s) to skip'
+                          .format(n=len(sponsors)))
+        notify_skips = sponsors and settings.notify_sponsor_skips()
+
         segment_start = 0.0
         report_time = -1.0
         wait_interval = 1
@@ -152,6 +163,21 @@ class PlayerMonitorThread(object):
                 waited = 0
                 player.seekTime(_seek_time)
                 continue
+
+            if sponsors and not player.seeking:
+                from ..sponsorblock import find as find_sponsor
+                segment = find_sponsor(sponsors, played_time)
+                if segment and segment[1] < total_time:
+                    log.debug('SponsorBlock: skipping {c} to {end}s'
+                              .format(c=segment[2], end=segment[1]))
+                    player.seekTime(segment[1])
+                    if notify_skips:
+                        context.get_ui().show_notification(
+                            context.localize(30840).format(segment[2]),
+                            time_ms=2500,
+                            audible=False,
+                        )
+                    continue
 
             if player.end_time and played_time >= player.end_time:
                 if waited and clip and player.start_time:

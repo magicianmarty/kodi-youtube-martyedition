@@ -102,6 +102,8 @@ SABR_ENABLED = 'kodion.sabr.enabled'  # (bool)
 CHANNEL_ON_TILES = 'kodion.channel.on.tiles'  # (bool)
 RETURN_TO_LISTING = 'kodion.return.to.listing'  # (bool)
 POT_PROVIDER_URL = 'kodion.pot.provider.url'  # (str)
+SPONSORBLOCK_ENABLED = 'kodion.sponsorblock.enabled'  # (bool)
+SPONSORBLOCK_NOTIFY = 'kodion.sponsorblock.notify'  # (bool)
 FANART_CHANNEL = 2
 FANART_THUMBNAIL = 3
 

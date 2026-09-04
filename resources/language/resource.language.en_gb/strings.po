@@ -1648,3 +1648,23 @@ msgstr ""
 msgctxt "#30835"
 msgid "Play queue"
 msgstr ""
+
+msgctxt "#30836"
+msgid "Skip sponsor segments"
+msgstr ""
+
+msgctxt "#30837"
+msgid "Uses SponsorBlock, where viewers mark the paid reads and self-promotion in a video. Only the first four characters of the video id's hash are sent, so the service is never told which video is playing. Most videos have nothing submitted and play unchanged."
+msgstr ""
+
+msgctxt "#30838"
+msgid "Say when a sponsor is skipped"
+msgstr ""
+
+msgctxt "#30839"
+msgid "Shows a brief notification so a jump in the video is explained rather than looking like a fault."
+msgstr ""
+
+msgctxt "#30840"
+msgid "Skipped {0}"
+msgstr ""

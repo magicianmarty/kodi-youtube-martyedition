@@ -107,6 +107,12 @@ class AbstractSettings(object):
     def channel_on_tiles(self):
         return self.get_bool(SETTINGS.CHANNEL_ON_TILES, True)
 
+    def skip_sponsors(self):
+        return self.get_bool(SETTINGS.SPONSORBLOCK_ENABLED, True)
+
+    def notify_sponsor_skips(self):
+        return self.get_bool(SETTINGS.SPONSORBLOCK_NOTIFY, True)
+
     def use_sabr(self):
         # Off by default. SABR is implemented and works, but it is not what
         # fixes playback - the client is - and minting a proof-of-origin
