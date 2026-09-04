@@ -18,6 +18,7 @@ from ..constants import (
     BUSY_FLAG,
     CHANNEL_ID,
     LAST_LISTING,
+    LAST_LISTING_WINDOW,
     PATHS,
     PLAYBACK_STARTED,
     PLAYBACK_STOPPED,
@@ -504,18 +505,23 @@ class PlayerMonitor(xbmc.Player):
         self.stop_threads()
         self.cleanup_threads()
 
+    # Kodi's Videos window. A listing drawn anywhere else was a widget.
+    VIDEOS_WINDOW = '10025'
+
     def _return_to_listing(self):
         """
-        Go back to the listing playback started from.
+        Go back to the listing playback started from, if there was one.
 
-        Kodi returns to whatever window is underneath, which is only the
-        right answer when that is one of ours. On a box where another add-on
-        owns the home screen, finishing a video drops the viewer into that
-        add-on instead - it reads as a crash rather than as the end of a
-        video.
+        Only when the listing was a Videos window. Rows on a skin's home
+        screen are widgets: the viewer never opened a listing, so reopening
+        one afterwards puts a file list on screen that they never asked for -
+        which is what this used to do, and it looked like the video had
+        dumped them somewhere. Kodi returns to the home screen by itself.
         """
         try:
             if not self._context.get_settings().return_to_listing():
+                return
+            if self._ui.get_property(LAST_LISTING_WINDOW) != self.VIDEOS_WINDOW:
                 return
             current = xbmc.getInfoLabel('Container.FolderPath') or ''
             if current.startswith('plugin://%s' % ADDON_ID):

@@ -40,6 +40,7 @@ from ...constants import (
     WINDOW_REPLACE,
     WINDOW_RETURN,
     LAST_LISTING,
+    LAST_LISTING_WINDOW,
 )
 from ...exceptions import KodionException
 from ...items import (
@@ -322,6 +323,11 @@ class XbmcPlugin(AbstractPlugin):
             # the service process, so this has to travel through a window
             # property rather than a variable.
             ui.set_property(LAST_LISTING, context.get_uri())
+            # And which window it was drawn in. A listing shown as a widget on
+            # someone else's home screen must not be reopened as a Videos
+            # window afterwards - that is a file list appearing out of nowhere.
+            ui.set_property(LAST_LISTING_WINDOW,
+                            str(xbmcgui.getCurrentWindowId()))
             succeeded = xbmcplugin.addDirectoryItems(
                 handle, items, len(items)
             )
